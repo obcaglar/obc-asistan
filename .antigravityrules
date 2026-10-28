@@ -1,0 +1,13 @@
+# .antigravityrules - Proje Mimari ve Kodlama Kuralları
+
+## Genel Prensipler
+- Dil: Tüm kullanıcı arayüzü metinleri, WhatsApp bot yanıtları ve hata mesajları akıcı **Türkçe** olmalıdır.
+- Zaman Dilimi: Tüm Google Takvim (Google Calendar API) etkinliklerinde varsayılan saat dilimi `Europe/Istanbul` (`UTC+03:00`) olarak kullanılmalıdır.
+
+## AI & Ses İşleme (Speech-to-Text & NLU)
+- Ses çözümleme ve metin analizi için her zaman `gemini-3-flash-preview` modeli kullanılmalıdır.
+- WhatsApp'tan gelen ses kayıtları Meta Graph API üzerinden `arraybuffer` olarak çekilip `base64` formatında (`mimeType: "audio/ogg"`) Gemini'ye iletilmelidir.
+
+## Sunucu ve Dağıtım (Deployment) Kuralları
+- `src/app/api/webhook/route.ts` dosyası Vercel Serverless ortamında çalıştığı için uzun süren işlemlerde Meta'nın yeniden deneme (retry) yapmaması adına `200 OK` yanıtı hızlıca dönülmeli ve hata yönetimi `try/catch` bloklarıyla korunmalıdır.
+- Hassas anahtarlar (`WHATSAPP_ACCESS_TOKEN`, `GOOGLE_REFRESH_TOKEN`, `GEMINI_API_KEY`) asla istemci koduna gömülmemeli, her zaman `process.env` üzerinden okunmalıdır.
