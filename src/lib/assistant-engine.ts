@@ -100,6 +100,8 @@ export function isBotReplyEcho(rawText?: string): boolean {
     t.includes("🔄 *Google Kişiler") ||
     t.includes("🗑️ *Google Kişiler") ||
     t.includes("📝 *Not Defterine") ||
+    t.includes("📝 *Google Tasks") ||
+    t.includes("📋 *Google Tasks") ||
     t.includes("📝 Mesajınız işlendi") ||
     t.includes("⚠️ *Silinecek") ||
     t.startsWith("Anlayamadım. Lütfen") ||
@@ -485,9 +487,15 @@ export function parseCommandLocally(
   const parsedDateInfo = parseDateAndTimeFromTurkishText(text);
   const isExplicitNote =
     lower.startsWith("!not") ||
+    lower.startsWith("!iş") ||
+    lower.startsWith("!is") ||
     lower.includes("not al") ||
     lower.includes("not et") ||
-    lower.includes("not defterine");
+    lower.includes("not defterine") ||
+    lower.includes("iş olarak") ||
+    lower.includes("is olarak") ||
+    lower.includes("görev olarak ata") ||
+    lower.includes("gorev olarak ata");
   if (
     !isExplicitNote &&
     (lower.startsWith("!toplanti") ||
@@ -640,34 +648,79 @@ export function parseCommandLocally(
     };
   }
 
-  // 3. NOTES
-  if (
-    lower.startsWith("!not") ||
-    lower.includes("not al") ||
-    lower.includes("not et") ||
-    lower.includes("hatırla")
-  ) {
-    let noteContent = text
-      .replace(/^(!not|not al:?|not et:?|not:?)/i, "")
-      .trim();
-    if (!noteContent) {
-      noteContent = "WhatsApp üzerinden alınan hızlı not.";
+  // 3. NOTES & GOOGLE TASKS / İŞ ATAMASI
+  if (isExplicitNote || lower.includes("hatırla")) {
+    const emailMatches =
+      text.match(/[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/g) || [];
+    const recipientEmail = emailMatches.join(", ");
+
+    let recipientQuery = "";
+    const possessivePersonMatch = text.match(
+      /(?:eşim|esim|karım|kocam|oğlum|kızım|annem|babam|kardeşim|arkadaşım|rehberdeki|kişilerdeki)?\s*([A-ZÇĞİÖŞÜa-zçğıöşü]+(?:\s+[A-ZÇĞİÖŞÜa-zçğıöşü]+)?)['’]?(?:ın|in|un|ün|nın|nin|nun|nün)\s+(?:gmail|mail\w*|e-?posta\w*|eposta\w*|hesab\w*|adres\w*)/i
+    );
+    const toPersonMatch = text.match(
+      /(?:eşim|esim|karım|kocam|oğlum|kızım|annem|babam|kardeşim|arkadaşım|rehberdeki|kişilerdeki)?\s*([A-ZÇĞİÖŞÜa-zçğıöşü]+(?:\s+[A-ZÇĞİÖŞÜa-zçğıöşü]+)?)['’]?(?:a|e|ya|ye)\s+(?:iş\s*olarak\s*)?(?:görev\s*olarak\s*)?(?:ata\w*|gönder\w*|gonder\w*|davet\w*|paylaş\w*|paylas\w*|ilet\w*)/i
+    );
+    const rawPersonCandidate = possessivePersonMatch
+      ? possessivePersonMatch[1]
+      : toPersonMatch
+        ? toPersonMatch[1]
+        : "";
+    if (rawPersonCandidate) {
+      recipientQuery = rawPersonCandidate
+        .replace(
+          /\b(ve|ile|de|da|eşim|esim|karım|kocam|oğlum|kızım|annem|babam|kardeşim|arkadaşım|rehberdeki|kişilerdeki|gmail|mail\w*|e-?posta\w*|eposta\w*|hesab\w*|adres\w*|iş|is|olarak|görev|gorev|not|al)\b/gi,
+          ""
+        )
+        .trim();
     }
-    const category =
-      lower.includes("sunucu") ||
-      lower.includes("ssl") ||
-      lower.includes("toplantı")
+
+    let noteContent = text
+      .replace(/^(!not|!iş|!is|not al:?|not et:?|not:?|iş olarak ata:?|görev olarak ata:?)/i, "")
+      .replace(
+        /[.,;:\s-]*(?:ve\s+|aynı\s+zamanda\s+)?(?:eşim|esim|karım|kocam|oğlum|kızım|annem|babam|kardeşim|arkadaşım|rehberdeki|kişilerdeki)?\s*[A-ZÇĞİÖŞÜa-zçğıöşü]+(?:\s+[A-ZÇĞİÖŞÜa-zçğıöşü]+)?['’]?(?:ın|in|un|ün|nın|nin|nun|nün)\s+(?:gmail|mail\w*|e-?posta\w*|eposta\w*|hesab\w*|adres\w*).*?(?:ata\w*|gönder\w*|gonder\w*|davet\w*|paylaş\w*|paylas\w*|ilet\w*).*$/i,
+        ""
+      )
+      .replace(
+        /[.,;:\s-]*(?:ve\s+|aynı\s+zamanda\s+)?(?:eşim|esim|karım|kocam|oğlum|kızım|annem|babam|kardeşim|arkadaşım|rehberdeki|kişilerdeki)?\s*[A-ZÇĞİÖŞÜa-zçğıöşü]+(?:\s+[A-ZÇĞİÖŞÜa-zçğıöşü]+)?['’]?(?:a|e|ya|ye)\s+(?:iş\s*olarak\s*)?(?:görev\s*olarak\s*)?(?:ata\w*|gönder\w*|gonder\w*|davet\w*|paylaş\w*|paylas\w*|ilet\w*).*$/i,
+        ""
+      )
+      .replace(
+        /[.,;:\s-]*(?:ve\s+|aynı\s+zamanda\s+)?[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}\s*(?:adresine|hesabına|mailine|e-?postasına)?\s*(?:iş\s*olarak\s*)?(?:görev\s*olarak\s*)?(?:ata\w*|gönder\w*|gonder\w*|ilet\w*)?.*$/i,
+        ""
+      )
+      .replace(/[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/g, "")
+      .replace(/[.,;:\s-]+$/g, "")
+      .trim();
+
+    if (!noteContent) {
+      noteContent = "WhatsApp üzerinden alınan görev / not.";
+    }
+    const isWorkAssigned = Boolean(
+      recipientEmail ||
+        recipientQuery ||
+        lower.includes("iş olarak") ||
+        lower.includes("is olarak")
+    );
+    const category = isWorkAssigned
+      ? "İş Ataması / Görev"
+      : lower.includes("sunucu") ||
+          lower.includes("ssl") ||
+          lower.includes("toplantı") ||
+          lower.includes("rapor")
         ? "İş / Altyapı"
         : lower.includes("market") || lower.includes("kahve")
           ? "Kişisel"
-          : "WhatsApp Notu";
+          : "Google Tasks / Not";
 
     return {
       intent: "note",
       action: "create",
+      recipientEmail: recipientEmail || undefined,
+      recipientQuery: recipientQuery || undefined,
       note: {
         title:
-          noteContent.slice(0, 35) + (noteContent.length > 35 ? "..." : ""),
+          noteContent.slice(0, 45) + (noteContent.length > 45 ? "..." : ""),
         content: noteContent,
         category,
       },
@@ -780,8 +833,10 @@ Kurallar:
    - Silme veya güncellemede yukarıdaki Güncel Google Takvim Listesinden SADECE kullanıcının söylediği gün, saat ve başlıkla gerçekten örtüşen etkinliği seç. İsimleri hiç benzemeyen başka bir etkinliği (Örn: Kahvaltı yerine Passolig) ASLA eşleştirme!
 3. SESLİ KOMUT (VOICE) ÇÖZÜMLEME VE HASSASİYET KURALLARI:
    - Sesli söylenen saatleri 24 saatlik HH:mm formatına çevir (Örn: "sabah sekiz buçuk / 08.30" -> "08:30", "iki buçuk / on dört otuz" -> "14:30", "üç buçuk" -> "15:30", "dörtte / on altıda" -> "16:00").
-4. TAKVİM / AJANDA ("calendar") vs NOT ("note") AYRIMI:
-   - Mesajda "ajanda", "takvim", "etkinlik", "toplantı", "randevu", "görev", "görüşme", "girer misin", "girip", "gir" geçiyorsa VEYA belirli bir saat/zaman içeren bir eylem varsa, intent KESİNLİKLE "calendar" olmalıdır.
+4. TAKVİM / AJANDA ("calendar") vs NOT & İŞ ATAMASI ("note") AYRIMI:
+   - Mesaj "!not", "!iş" ile başlıyorsa VEYA "not al", "not et", "iş olarak ata", "iş olarak gönder", "görev olarak ata" içeriyorsa intent KESİNLİKLE "note" olmalıdır!
+   - "note" (Google Tasks / İş Ataması) işleminde kullanıcı bir e-posta adresi veya Google Rehber'deki bir kişiyi belirttiyse (Örn: "Ali Sunal'a iş olarak ata", "eşim Esmeray'a iş olarak gönder", "ahmet@ornek.com adresine gönder"), kişinin sadece ismini "recipientQuery" alanına (Örn: "Ali Sunal", "Esmeray"), açık e-posta söylediyse "recipientEmail" alanına yaz; "note.title" ve "note.content" alanlarına ise sadece saf görev/not metnini yaz (kişi adını ve 'iş olarak ata/gönder' ifadesini not içeriğine dahil etme).
+   - Bunun dışında mesajda "ajanda", "takvim", "etkinlik", "toplantı", "randevu", "görüşme", "girer misin", "girip", "gir" geçiyorsa VEYA belirli bir saat/zaman içeren bir takvim eylemi varsa, intent KESİNLİKLE "calendar" olmalıdır.
 5. Mesaj "!rehber", "!kisi", "rehber", "kişi", "numara" içeriyorsa intent KESİNLİKLE "contact" olmalıdır.`;
 
   const cleanMimeType =
@@ -2112,6 +2167,145 @@ async function deleteGooglePersonContact(
   }
 }
 
+async function createGoogleTaskAndAssignment(
+  accessToken: string | null,
+  note: { title: string; content: string; category: string },
+  rawTranscript: string,
+  recipientEmail?: string,
+  recipientQuery?: string
+): Promise<{
+  ok: boolean;
+  syncedToTasks: boolean;
+  syncedToCalendar: boolean;
+  tasksScopeMissing?: boolean;
+  invitedEmails: string[];
+  resolvedContactName?: string;
+  htmlLink?: string;
+  error?: string;
+}> {
+  if (!accessToken) {
+    return {
+      ok: false,
+      syncedToTasks: false,
+      syncedToCalendar: false,
+      invitedEmails: [],
+      error: "Google oturumu aktif değil",
+    };
+  }
+
+  // 1. Resolve recipient email from Google Contacts or explicit email
+  const { emails, resolvedContactName } = await resolveRecipientEmails(
+    accessToken,
+    recipientEmail,
+    recipientQuery
+  );
+
+  const parsedDate = parseDateAndTimeFromTurkishText(rawTranscript);
+  const dueDateStr = parsedDate.dateStr || formatIsoDate(getIstanbulNow());
+  const startTime = parsedDate.hasExplicitTime ? parsedDate.startTime : "10:00";
+  const endTime = parsedDate.hasExplicitTime ? parsedDate.endTime : "10:30";
+
+  let syncedToTasks = false;
+  let tasksScopeMissing = false;
+  let syncedToCalendar = false;
+  let htmlLink: string | undefined;
+  let lastError: string | undefined;
+
+  // 2. Sync directly to Google Tasks API (@default tasklist)
+  try {
+    const taskTitle =
+      emails.length > 0
+        ? `${note.content} [İş Atanan: ${resolvedContactName || emails[0]}]`
+        : note.content;
+    const taskNotes =
+      `Kategori: ${note.category}` +
+      (emails.length > 0
+        ? `\nİş Atanan Kişi: ${resolvedContactName ? `${resolvedContactName} (${emails.join(", ")})` : emails.join(", ")}`
+        : "") +
+      `\nWhatsApp ⇄ Google Workspace Asistanı üzerinden oluşturuldu.`;
+
+    const tasksRes = await fetch(
+      "https://tasks.googleapis.com/tasks/v1/lists/@default/tasks",
+      {
+        method: "POST",
+        cache: "no-store",
+        headers: {
+          Authorization: `Bearer ${accessToken}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          title: taskTitle.slice(0, 200),
+          notes: taskNotes,
+          due: `${dueDateStr}T09:00:00.000Z`,
+        }),
+      }
+    );
+
+    if (tasksRes.ok) {
+      syncedToTasks = true;
+    } else {
+      const errBody = await tasksRes.json().catch(() => ({}));
+      const errMsg = String(errBody?.error?.message || `HTTP ${tasksRes.status}`);
+      if (tasksRes.status === 403 || tasksRes.status === 401) {
+        tasksScopeMissing = true;
+      } else {
+        lastError = errMsg;
+      }
+    }
+  } catch (err) {
+    lastError = err instanceof Error ? err.message : "Google Tasks hatası";
+  }
+
+  // 3. Also sync as a Google Calendar Task / İş Ataması
+  // - Sends official Google Task Assignment email (?sendUpdates=all) when a contact/email is specified
+  // - Ensures immediate visibility on Google Calendar/Tasks even if Tasks OAuth scope hasn't been re-consented yet
+  try {
+    const summaryPrefix =
+      emails.length > 0 ? "📋 [İş Ataması / Görev]:" : "📝 [Görev / Not]:";
+    const summaryText = `${summaryPrefix} ${note.content}`.slice(0, 180);
+    const calRes = await createGoogleCalendarEvent(
+      accessToken,
+      {
+        title: summaryText,
+        date: dueDateStr,
+        startTime,
+        endTime,
+        attendee:
+          resolvedContactName ||
+          (emails.length > 0 ? emails.join(", ") : "WhatsApp Kullanıcısı"),
+        attendeeEmail: emails.length > 0 ? emails.join(", ") : undefined,
+        location:
+          emails.length > 0
+            ? `İş Ataması (${resolvedContactName || emails[0]})`
+            : "Google Tasks / Notlar",
+      },
+      recipientQuery
+    );
+
+    if (calRes.ok) {
+      syncedToCalendar = true;
+      htmlLink = calRes.htmlLink;
+    } else if (calRes.error && !lastError) {
+      lastError = calRes.error;
+    }
+  } catch (err) {
+    if (!lastError) {
+      lastError = err instanceof Error ? err.message : "Takvim görev kaydı hatası";
+    }
+  }
+
+  return {
+    ok: syncedToTasks || syncedToCalendar,
+    syncedToTasks,
+    syncedToCalendar,
+    tasksScopeMissing,
+    invitedEmails: emails,
+    resolvedContactName,
+    htmlLink,
+    error: lastError,
+  };
+}
+
 // ============================================================================
 // MAIN ASSISTANT ENGINE ENTRYPOINT
 // ============================================================================
@@ -2242,6 +2436,12 @@ export async function processAssistantInput(params: {
     (parsed.intent === "note" && !parsed.note?.content)
   ) {
     parsed = localParsed;
+  } else if (localParsed.intent === "note" && localParsed.note) {
+    // Explicit !not / "not al" / "iş olarak ata" must always use the Google Tasks & İş Ataması flow
+    parsed.intent = "note";
+    if (!parsed.note?.content) {
+      parsed.note = localParsed.note;
+    }
   }
 
   // Hard guard: priority order is delete > update > create
@@ -2799,9 +2999,19 @@ export async function processAssistantInput(params: {
     };
   }
 
-  // ==================== 3. NOTES ====================
+  // ==================== 3. NOTES & GOOGLE TASKS / İŞ ATAMASI ====================
   if (parsed.intent === "note" && parsed.note) {
-    const noteSig = `note:${normalizeTr(parsed.note.content)}`;
+    const cleanNoteContent =
+      localParsed.intent === "note" &&
+      localParsed.note?.content &&
+      localParsed.note.content.length < parsed.note.content.length
+        ? localParsed.note.content
+        : parsed.note.content;
+    const cleanNoteTitle =
+      cleanNoteContent.slice(0, 45) +
+      (cleanNoteContent.length > 45 ? "..." : "");
+
+    const noteSig = `note:${normalizeTr(cleanNoteContent)}:${normalizeTr(recipientEmail || recipientQuery || "")}`;
     if (isRecentlyCreatedSignature(noteSig, 45000)) {
       return {
         transcript,
@@ -2816,16 +3026,54 @@ export async function processAssistantInput(params: {
 
     const note: NoteItem = {
       id: "not-" + Date.now(),
-      title: parsed.note.title,
-      content: parsed.note.content,
-      category: parsed.note.category || "WhatsApp Notu",
+      title: cleanNoteTitle,
+      content: cleanNoteContent,
+      category:
+        recipientEmail || recipientQuery
+          ? "İş Ataması / Görev"
+          : parsed.note.category || "Google Tasks / Not",
       time: "Şimdi",
     };
 
+    const taskSyncRes = await createGoogleTaskAndAssignment(
+      accessToken,
+      note,
+      transcript,
+      recipientEmail,
+      recipientQuery
+    );
+
+    syncedToGoogle = taskSyncRes.ok;
+    googleSyncError = taskSyncRes.error;
+
+    const hasAssignedPerson = taskSyncRes.invitedEmails.length > 0;
+    const headerLine = hasAssignedPerson
+      ? `📋 *Google Tasks & İş Ataması Oluşturuldu!*`
+      : `📝 *Google Tasks & Not Defterine Kaydedildi!*`;
+
+    const assigneeBlock = hasAssignedPerson
+      ? `\n👤 *İş Atanan Kişi:* ${
+          taskSyncRes.resolvedContactName
+            ? `${taskSyncRes.resolvedContactName} (${taskSyncRes.invitedEmails.join(", ")})`
+            : taskSyncRes.invitedEmails.join(", ")
+        }\n📨 *Bildirim:* İlgili kişiye Google üzerinden resmi iş ataması / görev daveti gönderildi!`
+      : recipientQuery
+        ? `\n⚠️ *Uyarı:* "${recipientQuery}" için Google Rehber'de kayıtlı bir e-posta adresi bulunamadı.`
+        : "";
+
+    const syncStatusLine = taskSyncRes.syncedToTasks
+      ? `\n✅ *Google Tasks (Görevler) ve Takvim uygulamanıza senkronize edildi!*`
+      : taskSyncRes.syncedToCalendar
+        ? `\n✅ *Google Takvim / Görevler hesabınıza senkronize edildi!*`
+        : "";
+
     const replyText =
-      `📝 *Not Defterine Kaydedildi!*\n\n` +
-      `"${note.content}"\n\n` +
-      `_Kategori: ${note.category} • Notlar sekmesinde saklandı._`;
+      (isVoice
+        ? `🎙️ *Sesli Komut Algılandı:* _"${transcript}"_\n\n`
+        : "") +
+      `${headerLine}\n\n` +
+      `📌 *Görev / Not:* "${note.content}"\n` +
+      `📂 *Kategori:* ${note.category}${assigneeBlock}${syncStatusLine}`;
 
     return {
       transcript,
@@ -2833,7 +3081,8 @@ export async function processAssistantInput(params: {
       action: "create",
       replyText,
       usedGemini,
-      syncedToGoogle: false,
+      syncedToGoogle,
+      googleSyncError,
       note,
     };
   }

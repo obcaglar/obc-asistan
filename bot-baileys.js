@@ -455,9 +455,12 @@ async function startWhatsAppBot() {
         trimmedText.startsWith("🗑️ *Google Kişiler") ||
         trimmedText.startsWith("⚠️ *Silinecek") ||
         trimmedText.startsWith("📝 *Not Defterine") ||
+        trimmedText.startsWith("📝 *Google Tasks") ||
+        trimmedText.startsWith("📋 *Google Tasks") ||
         trimmedText.startsWith("📝 Mesajınız işlendi") ||
         trimmedText.startsWith("Anlayamadım. Lütfen") ||
         trimmedText.includes("📌 *Başlık:*") ||
+        trimmedText.includes("📌 *Görev / Not:*") ||
         trimmedText.includes("🗓️ *Tarih:*")
       ) {
         processedMessageIds.add(msgId);
@@ -508,7 +511,9 @@ async function startWhatsAppBot() {
         lower.includes("kaldır") ||
         lower.includes("hatırlat") ||
         lower.includes("not al") ||
-        lower.includes("not et");
+        lower.includes("not et") ||
+        lower.includes("iş olarak") ||
+        lower.includes("is olarak");
 
       if (!isCommand) continue;
 

@@ -43,6 +43,7 @@ export async function GET() {
     scope: [
       "https://www.googleapis.com/auth/calendar.events",
       "https://www.googleapis.com/auth/contacts",
+      "https://www.googleapis.com/auth/tasks",
     ].join(" "),
   });
 
