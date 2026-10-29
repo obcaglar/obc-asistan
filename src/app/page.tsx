@@ -325,31 +325,97 @@ export default function HomePage() {
       let meta: ChatMessage["meta"] = null;
 
       if (result.intent === "calendar" && result.calendarEvent) {
-        setCalendarEvents((prev) => [result.calendarEvent!, ...prev]);
+        if (result.action === "delete") {
+          setCalendarEvents((prev) =>
+            prev.filter(
+              (e) =>
+                !e.title
+                  .toLocaleLowerCase("tr-TR")
+                  .includes(
+                    result.calendarEvent!.title.toLocaleLowerCase("tr-TR")
+                  )
+            )
+          );
+          showToast(
+            result.syncedToGoogle
+              ? "🗑️ Etkinlik gerçek Google Takvim'inizden silindi!"
+              : "🗑️ Etkinlik takvimden silindi!"
+          );
+        } else if (result.action === "update") {
+          setCalendarEvents((prev) => [
+            result.calendarEvent!,
+            ...prev.filter(
+              (e) =>
+                !e.title
+                  .toLocaleLowerCase("tr-TR")
+                  .includes(
+                    result.calendarEvent!.title.toLocaleLowerCase("tr-TR")
+                  )
+            ),
+          ]);
+          showToast(
+            result.syncedToGoogle
+              ? "🔄 Gerçek Google Takvim etkinliğiniz güncellendi!"
+              : "🔄 Takvim etkinliği güncellendi!"
+          );
+        } else {
+          setCalendarEvents((prev) => [result.calendarEvent!, ...prev]);
+          showToast(
+            result.syncedToGoogle
+              ? "✅ Gerçek Google Takvim'inize etkinlik eklendi!"
+              : "📅 Google Takvim etkinliği oluşturuldu!"
+          );
+        }
         meta = {
           type: "calendar",
           id: result.calendarEvent.id,
           syncedToGoogle: result.syncedToGoogle,
           usedGemini: result.usedGemini,
         };
-        showToast(
-          result.syncedToGoogle
-            ? "✅ Gerçek Google Takvim'inize etkinlik eklendi!"
-            : "📅 Google Takvim etkinliği oluşturuldu!"
-        );
       } else if (result.intent === "contact" && result.contact) {
-        setContactsList((prev) => [result.contact!, ...prev]);
+        if (result.action === "delete") {
+          setContactsList((prev) =>
+            prev.filter(
+              (c) =>
+                !c.name
+                  .toLocaleLowerCase("tr-TR")
+                  .includes(result.contact!.name.toLocaleLowerCase("tr-TR"))
+            )
+          );
+          showToast(
+            result.syncedToGoogle
+              ? "🗑️ Kişi gerçek Google Kişiler rehberinizden silindi!"
+              : "🗑️ Kişi rehberden silindi!"
+          );
+        } else if (result.action === "update") {
+          setContactsList((prev) => [
+            result.contact!,
+            ...prev.filter(
+              (c) =>
+                !c.name
+                  .toLocaleLowerCase("tr-TR")
+                  .includes(result.contact!.name.toLocaleLowerCase("tr-TR"))
+            ),
+          ]);
+          showToast(
+            result.syncedToGoogle
+              ? "🔄 Gerçek Google Kişiler kaydınız güncellendi!"
+              : "🔄 Kişi bilgileri güncellendi!"
+          );
+        } else {
+          setContactsList((prev) => [result.contact!, ...prev]);
+          showToast(
+            result.syncedToGoogle
+              ? "✅ Gerçek Google Kişiler rehberinize eklendi!"
+              : "👤 Yeni kişi rehbere eklendi!"
+          );
+        }
         meta = {
           type: "contact",
           id: result.contact.id,
           syncedToGoogle: result.syncedToGoogle,
           usedGemini: result.usedGemini,
         };
-        showToast(
-          result.syncedToGoogle
-            ? "✅ Gerçek Google Kişiler rehberinize eklendi!"
-            : "👤 Yeni kişi rehbere eklendi!"
-        );
       } else if (result.intent === "note" && result.note) {
         setNotesList((prev) => [result.note!, ...prev]);
         meta = {
@@ -1148,10 +1214,16 @@ WHATSAPP_VERIFY_TOKEN=${waverify}`;
                   >
                     <div className="font-semibold text-blue-700 flex items-center gap-1">
                       <i className="fa-regular fa-calendar-plus"></i> Google
-                      Takvim:
+                      Takvim (Ekle / Güncelle / Sil):
                     </div>
-                    <code className="text-[11px] text-slate-600 block mt-0.5 bg-white p-1 rounded border border-slate-200">
-                      !toplanti [Tarih/Saat] [Konu]
+                    <code className="text-[10px] text-slate-600 block mt-0.5 bg-white p-1 rounded border border-slate-200">
+                      !toplanti Yarın 14:00 Bütçe Toplantısı
+                    </code>
+                    <code className="text-[10px] text-slate-600 block mt-1 bg-white p-1 rounded border border-slate-200">
+                      !toplanti güncelle Bütçe Toplantısı Yarın 16:30
+                    </code>
+                    <code className="text-[10px] text-slate-600 block mt-1 bg-white p-1 rounded border border-slate-200">
+                      !toplanti sil Bütçe Toplantısı
                     </code>
                   </div>
 
@@ -1164,10 +1236,17 @@ WHATSAPP_VERIFY_TOKEN=${waverify}`;
                     className="p-2.5 bg-slate-50 border border-slate-200 rounded-xl hover:border-slate-300 transition cursor-pointer"
                   >
                     <div className="font-semibold text-emerald-700 flex items-center gap-1">
-                      <i className="fa-regular fa-id-badge"></i> Google Kişiler:
+                      <i className="fa-regular fa-id-badge"></i> Google Kişiler
+                      (Ekle / Güncelle / Sil):
                     </div>
-                    <code className="text-[11px] text-slate-600 block mt-0.5 bg-white p-1 rounded border border-slate-200">
-                      !rehber [İsim] [Telefon] [Eposta]
+                    <code className="text-[10px] text-slate-600 block mt-0.5 bg-white p-1 rounded border border-slate-200">
+                      !rehber Ali Kaya 05321112233 ali@kaya.com
+                    </code>
+                    <code className="text-[10px] text-slate-600 block mt-1 bg-white p-1 rounded border border-slate-200">
+                      !rehber güncelle Ali Kaya 05329998877
+                    </code>
+                    <code className="text-[10px] text-slate-600 block mt-1 bg-white p-1 rounded border border-slate-200">
+                      !rehber sil Ali Kaya
                     </code>
                   </div>
 

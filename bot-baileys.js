@@ -314,7 +314,12 @@ async function startWhatsAppBot() {
 
       if (
         text.startsWith("📅 *Google Takvim") ||
+        text.startsWith("🔄 *Google Takvim") ||
+        text.startsWith("🗑️ *Google Takvim") ||
         text.startsWith("👤 *Google Kişiler") ||
+        text.startsWith("🔄 *Google Kişiler") ||
+        text.startsWith("🗑️ *Google Kişiler") ||
+        text.startsWith("⚠️ *Silinecek") ||
         text.startsWith("📝 *Not Defterine") ||
         text.startsWith("📝 Mesajınız işlendi") ||
         text.startsWith("🎙️ *[Sesli Mesaj") ||
@@ -331,10 +336,21 @@ async function startWhatsAppBot() {
         lower.includes("toplanti") ||
         lower.includes("randevu") ||
         lower.includes("etkinlik") ||
+        lower.includes("takvim") ||
         lower.includes("rehber") ||
         lower.includes("kişi") ||
         lower.includes("kisi") ||
         lower.includes("numara") ||
+        lower.includes("kaydet") ||
+        lower.includes("ekle") ||
+        lower.includes("güncelle") ||
+        lower.includes("guncelle") ||
+        lower.includes("değiştir") ||
+        lower.includes("degistir") ||
+        lower.includes("ertele") ||
+        lower.includes("sil") ||
+        lower.includes("iptal") ||
+        lower.includes("kaldır") ||
         lower.includes("not al") ||
         lower.includes("not et");
 
@@ -374,13 +390,28 @@ async function startWhatsAppBot() {
           );
           result = response.data;
         } catch {
-          // If local Next.js server is off, process directly via Gemini + Google APIs in the cloud!
-          result = await processStandaloneCloud({
-            text: text || undefined,
-            audioBase64,
-            mimeType,
-            isVoice,
-          });
+          try {
+            const vercelResponse = await axios.post(
+              VERCEL_API_URL,
+              {
+                text: text || undefined,
+                audioBase64,
+                mimeType,
+                isVoice,
+                fromWhatsAppBot: true,
+              },
+              { timeout: 15000 }
+            );
+            result = vercelResponse.data;
+          } catch {
+            // If both local and Vercel servers are unreachable, process directly via Gemini + Google APIs!
+            result = await processStandaloneCloud({
+              text: text || undefined,
+              audioBase64,
+              mimeType,
+              isVoice,
+            });
+          }
         }
 
         if (result && result.replyText) {
