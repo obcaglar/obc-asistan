@@ -44,6 +44,8 @@ export async function GET() {
       "https://www.googleapis.com/auth/calendar.events",
       "https://www.googleapis.com/auth/contacts",
       "https://www.googleapis.com/auth/tasks",
+      "https://www.googleapis.com/auth/drive.readonly",
+      "https://www.googleapis.com/auth/photoslibrary.readonly",
     ].join(" "),
   });
 

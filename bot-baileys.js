@@ -457,6 +457,8 @@ async function startWhatsAppBot() {
         trimmedText.startsWith("📝 *Not Defterine") ||
         trimmedText.startsWith("📝 *Google Tasks") ||
         trimmedText.startsWith("📋 *Google Tasks") ||
+        trimmedText.startsWith("📸 *Google Photos") ||
+        trimmedText.startsWith("📁 *Google Drive") ||
         trimmedText.startsWith("📝 Mesajınız işlendi") ||
         trimmedText.startsWith("Anlayamadım. Lütfen") ||
         trimmedText.includes("📌 *Başlık:*") ||
@@ -513,7 +515,24 @@ async function startWhatsAppBot() {
         lower.includes("not al") ||
         lower.includes("not et") ||
         lower.includes("iş olarak") ||
-        lower.includes("is olarak");
+        lower.includes("is olarak") ||
+        lower.includes("foto") ||
+        lower.includes("resim") ||
+        lower.includes("albüm") ||
+        lower.includes("album") ||
+        lower.includes("galeri") ||
+        lower.includes("drive") ||
+        lower.includes("dosya") ||
+        lower.includes("belge") ||
+        lower.includes("doküman") ||
+        lower.includes("dokuman") ||
+        lower.includes("klasör") ||
+        lower.includes("klasor") ||
+        lower.includes("pdf") ||
+        lower.includes("excel") ||
+        lower.includes("seçenek") ||
+        lower.includes("secenek") ||
+        lower.includes("numaralı");
 
       if (!isCommand) continue;
 
@@ -683,6 +702,38 @@ async function startWhatsAppBot() {
           sentBotMessageIds.add(sentMsg.key.id);
           processedMessageIds.add(sentMsg.key.id);
         }
+
+        // If Google Photos / Drive images were returned, also send up to 3 actual photos directly to WhatsApp
+        if (Array.isArray(result.photos) && result.photos.length > 0) {
+          const accessToken = await getGoogleAccessToken();
+          for (const photo of result.photos.slice(0, 3)) {
+            const imgUrl = photo.thumbnailUrl || photo.downloadUrl;
+            if (!imgUrl) continue;
+            try {
+              const imgRes = await axios.get(imgUrl, {
+                responseType: "arraybuffer",
+                timeout: 8000,
+                headers: accessToken
+                  ? { Authorization: `Bearer ${accessToken}` }
+                  : {},
+              });
+              if (imgRes.data && imgRes.data.byteLength > 200) {
+                const imgSent = await sock.sendMessage(jid, {
+                  image: Buffer.from(imgRes.data),
+                  caption: `📸 *${photo.title}* (${photo.date})${BOT_INVISIBLE_MARKER}`,
+                });
+                lastBotReplyTimePerJid.set(jid, Date.now());
+                if (imgSent?.key?.id) {
+                  sentBotMessageIds.add(imgSent.key.id);
+                  processedMessageIds.add(imgSent.key.id);
+                }
+              }
+            } catch {
+              // Skip if individual thumbnail requires browser session
+            }
+          }
+        }
+
         console.log("✅ Tekil yanıt WhatsApp üzerinden gönderildi!");
       } catch (err) {
         console.error("Asistan hatası:", err.message);

@@ -138,10 +138,10 @@ export async function GET(request: NextRequest) {
       <body style="font-family:sans-serif;background:#020617;color:#fff;display:flex;align-items:center;justify-content:center;min-height:100vh;margin:0;">
         <div style="max-width:480px;background:#0f172a;border:1px solid #10b98155;padding:32px;border-radius:24px;text-align:center;box-shadow:0 20px 50px rgba(0,0,0,0.5);">
           <div style="font-size:48px;margin-bottom:12px;">🎉</div>
-          <h1 style="font-size:20px;color:#34d399;margin:0 0 12px;">Google Takvim, Rehber & Tasks Canlı Olarak Bağlandı!</h1>
+          <h1 style="font-size:20px;color:#34d399;margin:0 0 12px;">Google Takvim, Rehber, Tasks, Photos & Drive Canlı Bağlandı!</h1>
           <p style="font-size:13px;color:#cbd5e1;line-height:1.6;">
             <b>GOOGLE_REFRESH_TOKEN</b> otomatik olarak <code>.env.local</code> dosyanıza kaydedildi.<br><br>
-            Artık WhatsApp üzerinden göndereceğiniz tüm toplantı, kişi ve not/görev komutları doğrudan gerçek <b>Google Takvim</b>, <b>Google Kişiler</b> ve <b>Google Tasks (Görevler)</b> hesabınıza işlenecektir!
+            Artık WhatsApp ve Web üzerinden göndereceğiniz tüm komutlar <b>Google Takvim</b>, <b>Google Kişiler</b>, <b>Google Tasks</b>, <b>Google Photos (Fotoğraflar)</b> ve <b>Google Drive</b> hesabınızla canlı çalışacaktır!
           </p>
           <a href="http://localhost:3000" style="display:inline-block;margin-top:20px;padding:12px 24px;background:#10b981;color:#020617;font-weight:bold;text-decoration:none;border-radius:12px;font-size:13px;">
             Kontrol Paneline Dön →

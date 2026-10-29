@@ -446,6 +446,10 @@ export default function HomePage() {
             ? "📋 Görev & İş Ataması Google Tasks ve Takvim'e kaydedildi!"
             : "📝 Not başarıyla kaydedildi!"
         );
+      } else if (result.intent === "photos") {
+        showToast("📸 Google Photos ve Galeri sonuçları getirildi!");
+      } else if (result.intent === "drive") {
+        showToast("📁 Google Drive dosya ve içerik seçenekleri listelendi!");
       }
 
       const now = new Date().toLocaleTimeString("tr-TR", {
