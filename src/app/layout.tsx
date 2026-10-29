@@ -1,12 +1,25 @@
-import type { Metadata } from "next";
+import type { Metadata, Viewport } from "next";
 import Script from "next/script";
 import "./globals.css";
 
+export const viewport: Viewport = {
+  width: "device-width",
+  initialScale: 1,
+  maximumScale: 1,
+  userScalable: false,
+  themeColor: "#075E54",
+};
+
 export const metadata: Metadata = {
-  title: "WhatsApp ⇄ Google Workspace Asistanı (+905491007729)",
+  title: "OBC Sesli Asistan (+905491007729) • WhatsApp & Google Workspace",
   description:
-    "WhatsApp sesli ve yazılı mesajları Google Takvim, Google Kişiler ve Not Defteri ile senkronize eden 7/24 bulut yapay zeka asistanı.",
+    "WhatsApp canlı sesli arama, peş peşe sesli komut, Google Takvim, Kişiler, Görevler (Tasks), Google Photos ve Google Drive ile senkronize 7/24 bulut yapay zeka asistanı.",
   manifest: "/manifest.json",
+  appleWebApp: {
+    capable: true,
+    statusBarStyle: "black-translucent",
+    title: "OBC Asistan",
+  },
 };
 
 export default function RootLayout({

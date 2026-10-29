@@ -110,6 +110,9 @@ export interface AssistantProcessResult {
   note?: NoteItem;
   photos?: PhotoItem[];
   driveFiles?: DriveFileItem[];
+  selectedDriveFile?: DriveFileItem;
+  selectedPhoto?: PhotoItem;
+  chainedCount?: number;
 }
 
 export function isBotReplyEcho(rawText?: string): boolean {
@@ -132,6 +135,7 @@ export function isBotReplyEcho(rawText?: string): boolean {
     t.includes("📋 *Google Tasks") ||
     t.includes("📸 *Google Photos") ||
     t.includes("📁 *Google Drive") ||
+    t.includes("✅ *Seçilen Google Drive") ||
     t.includes("📝 Mesajınız işlendi") ||
     t.includes("⚠️ *Silinecek") ||
     t.startsWith("Anlayamadım. Lütfen") ||
@@ -156,6 +160,100 @@ export const recentWebhookEvents: {
   photos: [],
   driveFiles: [],
 };
+
+export function normalizeSpokenTurkishNumbersAndDates(input: string): string {
+  if (!input) return "";
+  let s = input;
+
+  // Convert spoken years ("iki bin yirmi altı" -> "2026", etc.) — avoid trailing \b after Turkish chars (ı, ş, ç, ö, ü)
+  s = s
+    .replace(/iki\s*bin\s*yirmi\s*alt[ıi]/gi, "2026")
+    .replace(/iki\s*bin\s*yirmi\s*be[şs]/gi, "2025")
+    .replace(/iki\s*bin\s*yirmi\s*d[öo]rt/gi, "2024")
+    .replace(/iki\s*bin\s*yirmi\s*[üu][çc]/gi, "2023")
+    .replace(/iki\s*bin\s*yirmi\s*iki/gi, "2022")
+    .replace(/iki\s*bin\s*yirmi\s*bir/gi, "2021")
+    .replace(/iki\s*bin\s*yirmi(?!\s*(?:bir|iki|[üu][çc]|d[öo]rt|be[şs]|alt[ıi]|yedi|sekiz|dokuz))/gi, "2020");
+
+  // Convert spoken compound day numbers (11..31)
+  const compoundMap: Array<[RegExp, string]> = [
+    [/(?:^|\s)otuz\s*bir(?=\s|$|[.,;:!?])/gi, " 31"],
+    [/(?:^|\s)otuz(?=\s|$|[.,;:!?])/gi, " 30"],
+    [/(?:^|\s)yirmi\s*dokuz(?=\s|$|[.,;:!?])/gi, " 29"],
+    [/(?:^|\s)yirmi\s*sekiz(?=\s|$|[.,;:!?])/gi, " 28"],
+    [/(?:^|\s)yirmi\s*yedi(?=\s|$|[.,;:!?])/gi, " 27"],
+    [/(?:^|\s)yirmi\s*alt[ıi](?=\s|$|[.,;:!?])/gi, " 26"],
+    [/(?:^|\s)yirmi\s*be[şs](?=\s|$|[.,;:!?])/gi, " 25"],
+    [/(?:^|\s)yirmi\s*d[öo]rt(?=\s|$|[.,;:!?])/gi, " 24"],
+    [/(?:^|\s)yirmi\s*[üu][çc](?=\s|$|[.,;:!?])/gi, " 23"],
+    [/(?:^|\s)yirmi\s*iki(?=\s|$|[.,;:!?])/gi, " 22"],
+    [/(?:^|\s)yirmi\s*bir(?=\s|$|[.,;:!?])/gi, " 21"],
+    [/(?:^|\s)yirmi(?=\s+(?:ocak|şubat|subat|mart|nisan|mayıs|mayis|haziran|temmuz|ağustos|agustos|eylül|eylul|ekim|kasım|kasim|aralık|aralik|numara))/gi, " 20"],
+    [/(?:^|\s)on\s*dokuz(?=\s|$|[.,;:!?])/gi, " 19"],
+    [/(?:^|\s)on\s*sekiz(?=\s|$|[.,;:!?])/gi, " 18"],
+    [/(?:^|\s)on\s*yedi(?=\s|$|[.,;:!?])/gi, " 17"],
+    [/(?:^|\s)on\s*alt[ıi](?=\s|$|[.,;:!?])/gi, " 16"],
+    [/(?:^|\s)on\s*be[şs](?=\s|$|[.,;:!?])/gi, " 15"],
+    [/(?:^|\s)on\s*d[öo]rt(?=\s|$|[.,;:!?])/gi, " 14"],
+    [/(?:^|\s)on\s*[üu][çc](?=\s|$|[.,;:!?])/gi, " 13"],
+    [/(?:^|\s)on\s*iki(?=\s|$|[.,;:!?])/gi, " 12"],
+    [/(?:^|\s)on\s*bir(?=\s|$|[.,;:!?])/gi, " 11"],
+  ];
+  for (const [rx, num] of compoundMap) {
+    s = s.replace(rx, num);
+  }
+  s = s.replace(/\s+/g, " ").trim();
+
+  // Convert single spoken digits (1..10) when followed by a month name, "hafta", "numara", or "seçenek"
+  const singleBeforeTarget: Array<[string, string]> = [
+    ["on", "10"],
+    ["dokuz", "9"],
+    ["sekiz", "8"],
+    ["yedi", "7"],
+    ["altı", "6"],
+    ["alti", "6"],
+    ["beş", "5"],
+    ["bes", "5"],
+    ["dört", "4"],
+    ["dort", "4"],
+    ["üç", "3"],
+    ["uc", "3"],
+    ["iki", "2"],
+    ["bir", "1"],
+  ];
+  for (const [word, digit] of singleBeforeTarget) {
+    const rx = new RegExp(
+      `(?:^|\\s)(${word})(?=\\s+(?:ocak|şubat|subat|mart|nisan|mayıs|mayis|haziran|temmuz|ağustos|agustos|eylül|eylul|ekim|kasım|kasim|aralık|aralik|hafta|numara|nolu|seçenek|secenek))`,
+      "gi"
+    );
+    s = s.replace(rx, (m, g1) => m.replace(g1, digit));
+  }
+
+  // Convert spoken ordinals ("birinci".."sekizinci") when followed by "seçenek", "dosya", "fotoğraf", "hafta"
+  const ordinalBeforeTarget: Array<[string, string]> = [
+    ["sekizinci", "8."],
+    ["yedinci", "7."],
+    ["altıncı", "6."],
+    ["altinci", "6."],
+    ["beşinci", "5."],
+    ["besinci", "5."],
+    ["dördüncü", "4."],
+    ["dorduncu", "4."],
+    ["üçüncü", "3."],
+    ["ucuncu", "3."],
+    ["ikinci", "2."],
+    ["birinci", "1."],
+  ];
+  for (const [ord, rep] of ordinalBeforeTarget) {
+    const rx = new RegExp(
+      `(?:^|\\s)(${ord})(?=\\s+(?:hafta|seçenek|secenek|dosya|belge|fotoğraf|fotograf|resim))`,
+      "gi"
+    );
+    s = s.replace(rx, (m, g1) => m.replace(g1, rep));
+  }
+
+  return s;
+}
 
 function getIstanbulNow(): Date {
   const nowStr = new Date().toLocaleString("en-US", {
@@ -350,7 +448,9 @@ export function parseCommandLocally(
   if (!rawText || isBotReplyEcho(rawText)) {
     return { intent: "help", action: "create" };
   }
-  const text = rawText.replace(/^["'“”]+|["'“”]+$/g, "").trim();
+  const text = normalizeSpokenTurkishNumbersAndDates(
+    rawText.replace(/^["'“”]+|["'“”]+$/g, "").trim()
+  );
   if (!text) {
     return { intent: "help", action: "create" };
   }
@@ -437,6 +537,35 @@ export function parseCommandLocally(
       : isUpdate
         ? "update"
         : "create";
+
+  // 0. NUMBERED OPTION SELECTION FOR DRIVE & PHOTOS ("5 numarayı paylaş", "!drive 5 numaralı dosyayı paylaş", "2. seçeneği gönder", "3 numaralı fotoğrafı paylaş")
+  const strippedForOption = text
+    .replace(
+      /^(!drive|!dosya[a-zA-Z0-9_çğıöşüÇĞİÖŞÜ'’]*|!belge[a-zA-Z0-9_çğıöşüÇĞİÖŞÜ'’]*|!foto[a-zA-Z0-9_çğıöşüÇĞİÖŞÜ'’]*|!resim[a-zA-Z0-9_çğıöşüÇĞİÖŞÜ'’]*)\s*:?\s*/i,
+      ""
+    )
+    .trim();
+  const isNotWeekOrMonth =
+    !/\b(hafta\w*|dönem\w*|donem\w*|sınıf\w*|sinif\w*|ocak|şubat|subat|mart|nisan|mayıs|mayis|haziran|temmuz|ağustos|agustos|eylül|eylul|ekim|kasım|kasim|aralık|aralik)\b/i.test(
+      strippedForOption
+    );
+  const optionSelectMatch = isNotWeekOrMonth
+    ? strippedForOption.match(
+        /^(?:seçenek\s*|secenek\s*)?([1-8])(?:\s*(?:\.|numaralı|numarali|numarayı|numarayi|numara|nolu|ncı|nci|üncü|uncu)?\s*(?:seçenek[a-zA-Z0-9_çğıöşüÇĞİÖŞÜ'’]*|secenek[a-zA-Z0-9_çğıöşüÇĞİÖŞÜ'’]*|dosya[a-zA-Z0-9_çğıöşüÇĞİÖŞÜ'’]*|belge[a-zA-Z0-9_çğıöşüÇĞİÖŞÜ'’]*|doküman[a-zA-Z0-9_çğıöşüÇĞİÖŞÜ'’]*|dokuman[a-zA-Z0-9_çğıöşüÇĞİÖŞÜ'’]*|fotoğraf[a-zA-Z0-9_çğıöşüÇĞİÖŞÜ'’]*|fotograf[a-zA-Z0-9_çğıöşüÇĞİÖŞÜ'’]*|resim[a-zA-Z0-9_çğıöşüÇĞİÖŞÜ'’]*)?(?:\s*(?:benimle|bana))?(?:\s*(?:paylaş[a-zA-Z0-9_çğıöşüÇĞİÖŞÜ'’]*|paylas[a-zA-Z0-9_çğıöşüÇĞİÖŞÜ'’]*|gönder[a-zA-Z0-9_çğıöşüÇĞİÖŞÜ'’]*|gonder[a-zA-Z0-9_çğıöşüÇĞİÖŞÜ'’]*|getir[a-zA-Z0-9_çğıöşüÇĞİÖŞÜ'’]*|aç[a-zA-Z0-9_çğıöşüÇĞİÖŞÜ'’]*|ac[a-zA-Z0-9_çğıöşüÇĞİÖŞÜ'’]*|indir[a-zA-Z0-9_çğıöşüÇĞİÖŞÜ'’]*))?)?[!.?]*$/i
+      )
+    : null;
+
+  if (optionSelectMatch) {
+    const wantsPhotoOption =
+      lower.startsWith("!foto") ||
+      lower.startsWith("!resim") ||
+      /\b(fotoğraf|fotograf|foto|resim|görsel|gorsel)\b/i.test(lower);
+    return {
+      intent: wantsPhotoOption ? "photos" : "drive",
+      action: "share",
+      targetQuery: optionSelectMatch[1],
+    };
+  }
 
   // 1. CONTACTS / GOOGLE PEOPLE
   if (
@@ -801,7 +930,7 @@ export function parseCommandLocally(
       )
       .replace(/[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/g, "")
       .replace(
-        /(?:^|\s)(google\s*photos[a-zA-Z0-9_çğıöşüÇĞİÖŞÜ'’]*|fotoğraf[a-zA-Z0-9_çğıöşüÇĞİÖŞÜ'’]*|fotograf[a-zA-Z0-9_çğıöşüÇĞİÖŞÜ'’]*|foto\b|resim[a-zA-Z0-9_çğıöşüÇĞİÖŞÜ'’]*|görsel[a-zA-Z0-9_çğıöşüÇĞİÖŞÜ'’]*|gorsel[a-zA-Z0-9_çğıöşüÇĞİÖŞÜ'’]*|albüm[a-zA-Z0-9_çğıöşüÇĞİÖŞÜ'’]*|album[a-zA-Z0-9_çğıöşüÇĞİÖŞÜ'’]*|galeri[a-zA-Z0-9_çğıöşüÇĞİÖŞÜ'’]*|benimle|bana|paylaş[a-zA-Z0-9_çğıöşüÇĞİÖŞÜ'’]*|paylas[a-zA-Z0-9_çğıöşüÇĞİÖŞÜ'’]*|gönder[a-zA-Z0-9_çğıöşüÇĞİÖŞÜ'’]*|gonder[a-zA-Z0-9_çğıöşüÇĞİÖŞÜ'’]*|getir[a-zA-Z0-9_çğıöşüÇĞİÖŞÜ'’]*|bul[a-zA-Z0-9_çğıöşüÇĞİÖŞÜ'’]*|listele[a-zA-Z0-9_çğıöşüÇĞİÖŞÜ'’]*|göster[a-zA-Z0-9_çğıöşüÇĞİÖŞÜ'’]*|goster[a-zA-Z0-9_çğıöşüÇĞİÖŞÜ'’]*|lütfen|lutfen|ait|olan|çekilen|cekilen|çekildiğimiz|cekildigimiz|çekilmiş|cekilmis|tarihteki|tarihli|içinde|icinde|örnekleri|ornekleri|örnek[a-zA-Z0-9_çğıöşüÇĞİÖŞÜ'’]*|ornek[a-zA-Z0-9_çğıöşüÇĞİÖŞÜ'’]*|ile|ve|birlikte)(?=\s|[?,!:.]|$)/gi,
+        /(?:^|\s)(google\s*photos[a-zA-Z0-9_çğıöşüÇĞİÖŞÜ'’]*|fotoğraf[a-zA-Z0-9_çğıöşüÇĞİÖŞÜ'’]*|fotograf[a-zA-Z0-9_çğıöşüÇĞİÖŞÜ'’]*|foto\b|resim[a-zA-Z0-9_çğıöşüÇĞİÖŞÜ'’]*|görsel[a-zA-Z0-9_çğıöşüÇĞİÖŞÜ'’]*|gorsel[a-zA-Z0-9_çğıöşüÇĞİÖŞÜ'’]*|albüm[a-zA-Z0-9_çğıöşüÇĞİÖŞÜ'’]*|album[a-zA-Z0-9_çğıöşüÇĞİÖŞÜ'’]*|galeri[a-zA-Z0-9_çğıöşüÇĞİÖŞÜ'’]*|benimle|bana|paylaş[a-zA-Z0-9_çğıöşüÇĞİÖŞÜ'’]*|paylas[a-zA-Z0-9_çğıöşüÇĞİÖŞÜ'’]*|gönder[a-zA-Z0-9_çğıöşüÇĞİÖŞÜ'’]*|gonder[a-zA-Z0-9_çğıöşüÇĞİÖŞÜ'’]*|getir[a-zA-Z0-9_çğıöşüÇĞİÖŞÜ'’]*|bul[a-zA-Z0-9_çğıöşüÇĞİÖŞÜ'’]*|listele[a-zA-Z0-9_çğıöşüÇĞİÖŞÜ'’]*|göster[a-zA-Z0-9_çğıöşüÇĞİÖŞÜ'’]*|goster[a-zA-Z0-9_çğıöşüÇĞİÖŞÜ'’]*|lütfen|lutfen|ait|olan|çekilen|cekilen|çekildiğimiz|cekildigimiz|çekilmiş|cekilmis|tarih[a-zA-Z0-9_çğıöşüÇĞİÖŞÜ'’]*|gün[a-zA-Z0-9_çğıöşüÇĞİÖŞÜ'’]*|gun[a-zA-Z0-9_çğıöşüÇĞİÖŞÜ'’]*|içinde|icinde|örnekleri|ornekleri|örnek[a-zA-Z0-9_çğıöşüÇĞİÖŞÜ'’]*|ornek[a-zA-Z0-9_çğıöşüÇĞİÖŞÜ'’]*|ile|ve|birlikte)(?=\s|[?,!:.]|$)/gi,
         " "
       )
       .replace(/['’](?:da|de|ta|te|dan|den|tan|ten|a|e|ya|ye|ın|in|un|ün|nın|nin|nun|nün)(?=\s|[?,!:.]|$)/gi, " ")
@@ -967,12 +1096,14 @@ Kurallar:
    - "note" (Google Tasks / İş Ataması) işleminde kullanıcı bir e-posta adresi veya Google Rehber'deki bir kişiyi belirttiyse (Örn: "Ali Sunal'a iş olarak ata", "eşim Esmeray'a iş olarak gönder", "ahmet@ornek.com adresine gönder"), kişinin sadece ismini "recipientQuery" alanına (Örn: "Ali Sunal", "Esmeray"), açık e-posta söylediyse "recipientEmail" alanına yaz; "note.title" ve "note.content" alanlarına ise sadece saf görev/not metnini yaz (kişi adını ve 'iş olarak ata/gönder' ifadesini not içeriğine dahil etme).
 5. GOOGLE PHOTOS ("photos") KESİN KURALI:
    - Mesajda "!foto", "!photos", "fotoğraf", "fotoğraflarımı", "resim", "görsel", "albüm", "çekildiğimiz fotoğraf", "çekilmiş fotoğraf", "Google Photos" geçiyorsa intent KESİNLİKLE "photos" olmalıdır!
-   - "targetQuery" alanına kullanıcının belirttiği TÜM filtreleri (kişi/aile üyesi + mekan/klasör + tam tarih veya dönem) eksiksiz yaz (Örn: "24 Ekim 2026", "25 Ekim 2026 Esmeray", "geçen hafta Esmeray", "İzmir Urla tatil", "Nehir", "Yusuf", "Kratos Kedi"). Asla tarih veya klasör bilgisini atma!
-6. GOOGLE DRIVE ("drive") KESİN KURALI:
+   - Sesli mesajlarda Türkçe yazıyla söylenen tarihleri rakama çevir (Örn: "on yedi eylül iki bin yirmi altı" -> "17 Eylül 2026", "on dokuz eylül" -> "19 Eylül").
+   - "targetQuery" alanına kullanıcının belirttiği TÜM filtreleri (kişi/aile üyesi + mekan/klasör + tam tarih veya dönem) eksiksiz yaz (Örn: "17 Eylül 2026", "19 Eylül 2026", "24 Ekim 2026", "25 Ekim 2026 Esmeray", "geçen hafta Esmeray", "İzmir Urla tatil", "Nehir", "Yusuf", "Kratos Kedi"). Asla tarih veya klasör bilgisini atma!
+6. GOOGLE DRIVE ("drive") VE NUMARALI SEÇENEK PAYLAŞIMI ("1 numarayı paylaş" / "5 numaralı dosyayı paylaş") KESİN KURALI:
+   - Kullanıcı daha önce listelenen seçeneklerden birini numarasıyla istiyorsa (Örn: "5 numarayı paylaş", "1 numaralı dosyayı paylaş", "beş numarayı gönder", "3. seçeneği aç"), intent KESİNLİKLE "drive", action "share" ve targetQuery sadece ilgili rakam (Örn: "5", "1", "3") olmalıdır! Bunu ASLA "calendar" veya "contact" yapma!
    - Mesajda "!drive", "!dosya", "!belge", "Google Drive", "Drive'daki", "dosya", "dosyalarımı", "belge", "doküman", "PDF", "Excel", "Word", "Sunum", "Rapor", "Tablo", "klasör", "klasörümdeki", "hafta dosyaları", "seçenekler halinde" geçiyorsa intent KESİNLİKLE "drive" olmalıdır!
    - Sesli mesajlarda "altıncı hafta" -> "6. hafta", "beşinci hafta" -> "5. hafta" olarak rakamla yaz.
    - "targetQuery" alanına kullanıcının belirttiği klasör adını, hafta/tarih bilgisini, dosya türünü ve konuyu BİRLİKTE eksiksiz yaz (Örn: "Topkapı Üniversitesi 6. hafta", "Topkapı Üniversitesi bu hafta", "BSİ424 6. hafta sunum", "Esmeray CV", "Zuber sözleşme"). Asla klasör veya hafta bilgisini atma!
-7. Mesaj "!rehber", "!kisi", "rehber", "kişi", "numara" içeriyorsa intent KESİNLİKLE "contact" olmalıdır.`;
+7. Mesaj "!rehber", "!kisi", "rehbere ekle", "kişi ekle" veya bir telefon numarası (05xx...) içeriyorsa intent KESİNLİKLE "contact" olmalıdır ("5 numarayı paylaş" gibi sıra numarası seçimleri "contact" DEĞİLDİR, "drive" veya "photos" seçimidir).`;
 
   const cleanMimeType =
     (params.mimeType || "audio/ogg").split(";")[0].trim() || "audio/ogg";
@@ -2493,6 +2624,79 @@ async function createGoogleTaskAndAssignment(
 }
 
 let cachedDriveSearchResults: DriveFileItem[] = [];
+let cachedPhotoSearchResults: PhotoItem[] = [];
+
+function getSearchCacheFilePath(): string {
+  return path.join(process.cwd(), ".last_search_cache.json");
+}
+
+function saveLastSearchResultsCache(data: {
+  driveFiles?: DriveFileItem[];
+  photos?: PhotoItem[];
+}) {
+  if (data.driveFiles && data.driveFiles.length > 0) {
+    cachedDriveSearchResults = data.driveFiles;
+  }
+  if (data.photos && data.photos.length > 0) {
+    cachedPhotoSearchResults = data.photos;
+  }
+  try {
+    const filePath = getSearchCacheFilePath();
+    let existing: { driveFiles?: DriveFileItem[]; photos?: PhotoItem[] } = {};
+    if (fs.existsSync(filePath)) {
+      existing = JSON.parse(fs.readFileSync(filePath, "utf-8"));
+    }
+    const merged = {
+      driveFiles:
+        data.driveFiles && data.driveFiles.length > 0
+          ? data.driveFiles
+          : existing.driveFiles || cachedDriveSearchResults,
+      photos:
+        data.photos && data.photos.length > 0
+          ? data.photos
+          : existing.photos || cachedPhotoSearchResults,
+    };
+    fs.writeFileSync(filePath, JSON.stringify(merged, null, 2), "utf-8");
+  } catch {
+    // Ignore on read-only serverless container
+  }
+}
+
+function loadLastSearchResultsCache(): {
+  driveFiles: DriveFileItem[];
+  photos: PhotoItem[];
+} {
+  try {
+    const filePath = getSearchCacheFilePath();
+    if (fs.existsSync(filePath)) {
+      const parsed = JSON.parse(fs.readFileSync(filePath, "utf-8"));
+      if (
+        cachedDriveSearchResults.length === 0 &&
+        Array.isArray(parsed.driveFiles)
+      ) {
+        cachedDriveSearchResults = parsed.driveFiles;
+      }
+      if (
+        cachedPhotoSearchResults.length === 0 &&
+        Array.isArray(parsed.photos)
+      ) {
+        cachedPhotoSearchResults = parsed.photos;
+      }
+    }
+  } catch {
+    // Ignore read errors
+  }
+  return {
+    driveFiles:
+      cachedDriveSearchResults.length > 0
+        ? cachedDriveSearchResults
+        : recentWebhookEvents.driveFiles,
+    photos:
+      cachedPhotoSearchResults.length > 0
+        ? cachedPhotoSearchResults
+        : recentWebhookEvents.photos,
+  };
+}
 
 function getDriveFileTypeLabel(mimeType: string): string {
   if (mimeType.includes("folder")) return "📁 Klasör";
@@ -2900,6 +3104,23 @@ function parseDriveAndPhotoConstraints(
     "ayın",
     "yil",
     "yıl",
+    "yili",
+    "yılı",
+    "yilindaki",
+    "yılındaki",
+    "tarih",
+    "tarihi",
+    "tarihli",
+    "tarihte",
+    "tarihteki",
+    "tarihinde",
+    "tarihindeki",
+    "gun",
+    "gün",
+    "gunu",
+    "günü",
+    "gunundeki",
+    "günündeki",
     "pazartesi",
     "sali",
     "salı",
@@ -3357,6 +3578,7 @@ async function searchGooglePhotosAndDriveImages(
 ): Promise<{
   ok: boolean;
   photos: PhotoItem[];
+  selectedOption?: PhotoItem;
   filterNote?: string;
   googlePhotosSearchUrl?: string;
   scopeMissing?: boolean;
@@ -3371,7 +3593,36 @@ async function searchGooglePhotosAndDriveImages(
     };
   }
 
-  const constraints = parseDriveAndPhotoConstraints(queryText, rawTranscript);
+  // Check if user is selecting a numbered photo option ("1", "2 numaralı fotoğrafı paylaş")
+  const normRawForOpt = normalizeSpokenTurkishNumbersAndDates(rawTranscript)
+    .replace(/^(!foto[a-zA-Z0-9_çğıöşüÇĞİÖŞÜ'’]*|!resim[a-zA-Z0-9_çğıöşüÇĞİÖŞÜ'’]*)\s*:?\s*/i, "")
+    .trim();
+  const photoOptMatch =
+    !/\b(hafta\w*|ocak|şubat|subat|mart|nisan|mayıs|mayis|haziran|temmuz|ağustos|agustos|eylül|eylul|ekim|kasım|kasim|aralık|aralik)\b/i.test(
+      normRawForOpt
+    )
+      ? normRawForOpt.match(
+          /^(?:seçenek\s*|secenek\s*)?([1-8])(?:\s*(?:\.|numaralı|numarali|numarayı|numarayi|numara|nolu|ncı|nci|üncü|uncu)?\s*(?:seçenek[a-zA-Z0-9_çğıöşüÇĞİÖŞÜ'’]*|fotoğraf[a-zA-Z0-9_çğıöşüÇĞİÖŞÜ'’]*|fotograf[a-zA-Z0-9_çğıöşüÇĞİÖŞÜ'’]*|resim[a-zA-Z0-9_çğıöşüÇĞİÖŞÜ'’]*)?(?:\s*(?:benimle|bana))?(?:\s*(?:paylaş[a-zA-Z0-9_çğıöşüÇĞİÖŞÜ'’]*|paylas[a-zA-Z0-9_çğıöşüÇĞİÖŞÜ'’]*|gönder[a-zA-Z0-9_çğıöşüÇĞİÖŞÜ'’]*|gonder[a-zA-Z0-9_çğıöşüÇĞİÖŞÜ'’]*|getir[a-zA-Z0-9_çğıöşüÇĞİÖŞÜ'’]*|aç[a-zA-Z0-9_çğıöşüÇĞİÖŞÜ'’]*))?)?[!.?]*$/i
+        )
+      : null;
+
+  if (photoOptMatch) {
+    const cached = loadLastSearchResultsCache().photos;
+    const idx = parseInt(photoOptMatch[1], 10) - 1;
+    if (idx >= 0 && idx < cached.length) {
+      const chosen = cached[idx];
+      return {
+        ok: true,
+        photos: [chosen],
+        selectedOption: chosen,
+      };
+    }
+  }
+
+  const constraints = parseDriveAndPhotoConstraints(
+    normalizeSpokenTurkishNumbersAndDates(queryText),
+    normalizeSpokenTurkishNumbersAndDates(rawTranscript)
+  );
   const photos: PhotoItem[] = [];
   let scopeMissing = false;
   let serviceDisabledUrl: string | undefined;
@@ -3432,21 +3683,31 @@ async function searchGooglePhotosAndDriveImages(
     }
 
     if (constraints.hasAnyDateFilter && constraints.dateFromIso && constraints.dateToIso) {
-      const compactPrefix =
-        constraints.targetDay > 0 && constraints.targetMonth > 0
-          ? `${constraints.targetYear || getIstanbulNow().getFullYear()}${String(constraints.targetMonth).padStart(2, "0")}${String(constraints.targetDay).padStart(2, "0")}`
-          : "";
-      const isoPrefix =
-        constraints.targetDay > 0 && constraints.targetMonth > 0
-          ? `${constraints.targetYear || getIstanbulNow().getFullYear()}-${String(constraints.targetMonth).padStart(2, "0")}-${String(constraints.targetDay).padStart(2, "0")}`
+      const effY = constraints.targetYear || getIstanbulNow().getFullYear();
+      const mPad = constraints.targetMonth > 0 ? String(constraints.targetMonth).padStart(2, "0") : "";
+      const dPad = constraints.targetDay > 0 ? String(constraints.targetDay).padStart(2, "0") : "";
+      const compactPrefix = mPad && dPad ? `${effY}${mPad}${dPad}` : "";
+      const isoPrefix = mPad && dPad ? `${effY}-${mPad}-${dPad}` : "";
+      const crossYearClause =
+        mPad && dPad
+          ? ` or name contains '-${mPad}-${dPad}' or name contains '${mPad}${dPad}'`
           : "";
       const nameDateClause =
         compactPrefix && isoPrefix
-          ? ` or name contains '${isoPrefix}' or name contains '${compactPrefix}'`
+          ? ` or name contains '${isoPrefix}' or name contains '${compactPrefix}'${crossYearClause}`
           : "";
       directQueries.push(
         `trashed = false and (mimeType contains 'image/' or mimeType contains 'video/') and ((modifiedTime >= '${constraints.dateFromIso}T00:00:00' and modifiedTime <= '${constraints.dateToIso}T23:59:59') or (createdTime >= '${constraints.dateFromIso}T00:00:00' and createdTime <= '${constraints.dateToIso}T23:59:59')${nameDateClause})`
       );
+
+      // Also fetch the full target month in Drive so if the exact day has 0 files, we can offer the closest days in that exact month!
+      if (mPad) {
+        const monthStart = `${effY}-${mPad}-01T00:00:00`;
+        const monthEnd = `${effY}-${mPad}-31T23:59:59`;
+        directQueries.push(
+          `trashed = false and (mimeType contains 'image/' or mimeType contains 'video/') and ((modifiedTime >= '${monthStart}' and modifiedTime <= '${monthEnd}') or (createdTime >= '${monthStart}' and createdTime <= '${monthEnd}') or name contains '${effY}-${mPad}' or name contains '${effY}${mPad}')`
+        );
+      }
     }
 
     if (constraints.isGeneralRecentRequest) {
@@ -3454,7 +3715,7 @@ async function searchGooglePhotosAndDriveImages(
     }
 
     for (const dq of directQueries) {
-      const dUrl = `https://www.googleapis.com/drive/v3/files?q=${encodeURIComponent(dq)}&pageSize=40&orderBy=modifiedTime desc&fields=files(id,name,mimeType,createdTime,modifiedTime,parents,webViewLink,webContentLink,thumbnailLink,description,imageMediaMetadata(time))`;
+      const dUrl = `https://www.googleapis.com/drive/v3/files?q=${encodeURIComponent(dq)}&pageSize=60&orderBy=modifiedTime desc&fields=files(id,name,mimeType,createdTime,modifiedTime,parents,webViewLink,webContentLink,thumbnailLink,description,imageMediaMetadata(time))`;
       const dRes = await fetch(dUrl, {
         cache: "no-store",
         headers: { Authorization: `Bearer ${accessToken}` },
@@ -3515,6 +3776,7 @@ async function searchGooglePhotosAndDriveImages(
         file,
         folderPath,
         primaryDate,
+        allCandidateDates,
         dateMatched,
         keywordMatched,
         keywordScore,
@@ -3583,25 +3845,148 @@ async function searchGooglePhotosAndDriveImages(
           `📱 Telefonunuzdaki *Google Fotoğraflar* uygulamasında doğrudan açmak için tıklayın: ${googlePhotosSearchUrl}`;
       }
     } else if (constraints.hasAnyDateFilter && constraints.keywords.length === 0) {
-      // User asked ONLY for a specific date (e.g. "24 Ekim 2026" or "28 Ekim"), and 0 photos exist on that date in Drive.
-      // DO NOT return unrelated images ("ust_tabela.png", "barista_onden.png")!
-      filterNote =
-        `ℹ️ Google Drive arşivinizde *${constraints.humanDateLabel}* tarihinde çekilmiş veya yüklenmiş bir fotoğraf bulunamadı (İlgisiz dosyalar paylaşılmamıştır).\n\n` +
-        `📱 *Telefonunuzdaki Google Fotoğraflar (Kamera Bulutu) Galerisinde Bu Tarihi Açmak İçin:*\n🔗 ${googlePhotosSearchUrl}\n\n` +
-        `📅 *Google Drive Arşivinizde Fotoğraf Bulunan En Yakın Ekim 2026 Tarihleri:*\n` +
-        `• *27 Ekim 2026* ("!foto 27 Ekim")\n` +
-        `• *26 Ekim 2026* ("!foto 26 Ekim")\n` +
-        `• *21 Ekim 2026* ("!foto 21 Ekim")\n` +
-        `• *20 Ekim 2026* ("!foto 20 Ekim")\n` +
-        `• *7 Ekim 2026* ("!foto 7 Ekim")\n` +
-        `• *2 Ekim 2026* ("!foto 2 Ekim")\n\n` +
-        `👨‍👩‍👧‍👦 *Aile & Özel Albüm Klasörleriniz:*\n` +
-        `• *Esmeray* ("!foto Esmeray")\n` +
-        `• *Nehir* ("!foto Nehir")\n` +
-        `• *Yusuf* ("!foto Yusuf")\n` +
-        `• *Tatil (İzmir & Urla, Sömestre, Trabzon, Bodrum)* ("!foto İzmir Urla tatil")\n` +
-        `• *Hatıralar (AFL-92)* ("!foto Hatıralar")\n` +
-        `• *Kratos Kedi* ("!foto Kratos")`;
+      // User asked for a specific date (e.g. "17 Eylül 2026", "19 Eylül 2026", "24 Ekim 2026", "28 Ekim")
+      const effY = constraints.targetYear || getIstanbulNow().getFullYear();
+      const mPad = constraints.targetMonth > 0 ? String(constraints.targetMonth).padStart(2, "0") : "";
+      const dPad = constraints.targetDay > 0 ? String(constraints.targetDay).padStart(2, "0") : "";
+      const monthNamesTr = [
+        "",
+        "Ocak",
+        "Şubat",
+        "Mart",
+        "Nisan",
+        "Mayıs",
+        "Haziran",
+        "Temmuz",
+        "Ağustos",
+        "Eylül",
+        "Ekim",
+        "Kasım",
+        "Aralık",
+      ];
+      const monthLabelTr = monthNamesTr[constraints.targetMonth] || mPad;
+
+      // 1) Check if same MM-DD exists in another year in Drive
+      const sameDayAnyYear =
+        mPad && dPad
+          ? uniqueCandidates.filter(
+              (c) =>
+                !c.isDocumentScan &&
+                c.allCandidateDates.some((d) => d.endsWith(`-${mPad}-${dPad}`))
+            )
+          : [];
+
+      // 2) Find all photos in that target month (YYYY-MM) and sort by closest day distance to targetDay
+      const monthPrefix = mPad ? `${effY}-${mPad}-` : "";
+      const sameMonthCandidates = monthPrefix
+        ? uniqueCandidates
+            .filter(
+              (c) =>
+                !c.isDocumentScan &&
+                !/^(ust_tabela|barista_onden|sol_yan)/i.test(String(c.file.name || "")) &&
+                c.allCandidateDates.some((d) => d.startsWith(monthPrefix))
+            )
+            .map((c) => {
+              const mDate =
+                c.allCandidateDates.find((d) => d.startsWith(monthPrefix)) ||
+                c.primaryDate;
+              const dayNum = parseInt(mDate.slice(8, 10), 10) || 1;
+              const dayDiff =
+                constraints.targetDay > 0
+                  ? Math.abs(dayNum - constraints.targetDay)
+                  : 0;
+              return { ...c, matchedMonthDate: mDate, dayNum, dayDiff };
+            })
+            .sort((a, b) => a.dayDiff - b.dayDiff)
+        : [];
+
+      const availableDaysInMonth = Array.from(
+        new Set(
+          uniqueCandidates
+            .flatMap((c) => c.allCandidateDates)
+            .filter((d) => monthPrefix && d.startsWith(monthPrefix))
+            .map((d) => parseInt(d.slice(8, 10), 10))
+            .filter((n) => !isNaN(n))
+        )
+      )
+        .sort((a, b) => b - a)
+        .slice(0, 8);
+
+      const availableDaysFormatted =
+        availableDaysInMonth.length > 0
+          ? availableDaysInMonth
+              .map((d) => `• *${d} ${monthLabelTr} ${effY}* ("!foto ${d} ${monthLabelTr}")`)
+              .join("\n")
+          : `• *27 Ekim 2026* ("!foto 27 Ekim")\n• *26 Ekim 2026* ("!foto 26 Ekim")\n• *21 Eylül 2026* ("!foto 21 Eylül")\n• *15 Eylül 2026* ("!foto 15 Eylül")`;
+
+      if (
+        (sameMonthCandidates.length > 0 && sameMonthCandidates[0].dayDiff <= 6) ||
+        sameDayAnyYear.length > 0
+      ) {
+        const nearestInMonth = sameMonthCandidates.filter((c) => c.dayDiff <= 6);
+        const nearestDates = Array.from(
+          new Set(nearestInMonth.slice(0, 4).map((c) => c.matchedMonthDate))
+        ).join(", ");
+
+        if (nearestInMonth.length > 0 && sameDayAnyYear.length > 0) {
+          filterNote =
+            `ℹ️ *Not:* *${constraints.humanDateLabel}* için *${monthLabelTr} ${effY}* dönemindeki en yakın tarihli (*${nearestDates}*) fotoğraflarınız ve geçmiş yıllardaki *${constraints.targetDay} ${monthLabelTr}* fotoğraflarınız birlikte listelenmiştir:\n` +
+            `📱 *Telefon Kameranızdaki Google Fotoğraflar Bulutunda ${constraints.humanDateLabel} Gününü Açmak İçin:* ${googlePhotosSearchUrl}`;
+        } else if (nearestInMonth.length > 0) {
+          filterNote =
+            `ℹ️ *Not:* Google Drive arşivinizde tam *${constraints.humanDateLabel}* gününe ait fotoğraf bulunamadığı için, *${monthLabelTr} ${effY}* dönemindeki en yakın tarihli (*${nearestDates}*) fotoğraflarınız aşağıda paylaşılmıştır:\n` +
+            `📱 *Telefon Kameranızdaki Google Fotoğraflar Bulutunda ${constraints.humanDateLabel} Gününü Açmak İçin:* ${googlePhotosSearchUrl}`;
+        } else {
+          filterNote =
+            `ℹ️ *Not:* *${constraints.humanDateLabel}* yılına ait kayıt bulunamadı; ancak geçmiş yıllarda *${constraints.targetDay} ${monthLabelTr}* gününe ait fotoğraflarınız bulundu:`;
+        }
+
+        const seenCombine = new Set<string>();
+        for (const item of nearestInMonth.slice(0, 4)) {
+          if (seenCombine.has(item.file.id)) continue;
+          seenCombine.add(item.file.id);
+          photos.push({
+            id: item.file.id,
+            title: item.file.name,
+            date: item.matchedMonthDate,
+            url: item.file.webViewLink || `https://drive.google.com/file/d/${item.file.id}/view`,
+            thumbnailUrl: item.file.thumbnailLink,
+            downloadUrl: `https://www.googleapis.com/drive/v3/files/${item.file.id}?alt=media`,
+            mimeType: item.file.mimeType || "image/jpeg",
+            source: "Google Drive",
+            albumOrLocation: item.folderPath,
+          });
+        }
+        for (const item of sameDayAnyYear) {
+          if (photos.length >= 6) break;
+          if (seenCombine.has(item.file.id)) continue;
+          seenCombine.add(item.file.id);
+          photos.push({
+            id: item.file.id,
+            title: item.file.name,
+            date: item.primaryDate,
+            url: item.file.webViewLink || `https://drive.google.com/file/d/${item.file.id}/view`,
+            thumbnailUrl: item.file.thumbnailLink,
+            downloadUrl: `https://www.googleapis.com/drive/v3/files/${item.file.id}?alt=media`,
+            mimeType: item.file.mimeType || "image/jpeg",
+            source: "Google Drive",
+            albumOrLocation: item.folderPath,
+          });
+        }
+      } else {
+        filterNote =
+          `ℹ️ Google Drive arşivinizde *${constraints.humanDateLabel}* tarihinde çekilmiş veya yüklenmiş bir fotoğraf bulunamadı (İlgisiz dosyalar paylaşılmamıştır).\n\n` +
+          `📱 *Telefonunuzdaki Google Fotoğraflar (Kamera Bulutu) Galerisinde Bu Tarihi Açmak İçin:*\n🔗 ${googlePhotosSearchUrl}\n\n` +
+          `📅 *Google Drive Arşivinizde Fotoğraf Bulunan ${monthLabelTr} ${effY} Tarihleri:*\n` +
+          `${availableDaysFormatted}\n\n` +
+          `👨‍👩‍👧‍👦 *Aile & Özel Albüm Klasörleriniz:*\n` +
+          `• *Esmeray* ("!foto Esmeray")\n` +
+          `• *Nehir* ("!foto Nehir")\n` +
+          `• *Yusuf* ("!foto Yusuf")\n` +
+          `• *Tatil (İzmir & Urla, Sömestre, Trabzon, Bodrum)* ("!foto İzmir Urla tatil")\n` +
+          `• *Hatıralar (AFL-92)* ("!foto Hatıralar")\n` +
+          `• *Kratos Kedi* ("!foto Kratos")`;
+      }
     } else {
       filterNote =
         `ℹ️ Google Drive arşivinizde *"${queryText}"* aramasına uygun fotoğraf bulunamadı.\n` +
@@ -3609,6 +3994,10 @@ async function searchGooglePhotosAndDriveImages(
     }
   } catch (err) {
     lastError = err instanceof Error ? err.message : "Fotoğraf arama hatası";
+  }
+
+  if (photos.length > 0) {
+    saveLastSearchResultsCache({ photos: photos.slice(0, 6) });
   }
 
   return {
@@ -3656,23 +4045,32 @@ async function searchAndShareGoogleDriveFiles(
   );
 
   // Check if user is ONLY selecting a numbered option from the previous search
-  // (e.g. "1", "1 numaralı dosyayı paylaş", "2. seçeneği gönder") — NEVER match "6. hafta" or "24 Ekim"!
-  const cleanForOption = rawTranscript
-    .replace(/^(!drive|!dosya|!belge)\s*/i, "")
+  // (e.g. "5", "5 numarayı paylaş", "!drive 5 numaralı dosyayı paylaş", "2. seçeneği gönder", "beş numaralı dosyayı paylaş")
+  const cleanForOption = normalizeSpokenTurkishNumbersAndDates(rawTranscript)
+    .replace(
+      /^(!drive|!dosya[a-zA-Z0-9_çğıöşüÇĞİÖŞÜ'’]*|!belge[a-zA-Z0-9_çğıöşüÇĞİÖŞÜ'’]*)\s*:?\s*/i,
+      ""
+    )
     .trim();
   const optionMatch =
-    !/\b(hafta\w*|dönem\w*|donem\w*|sınıf\w*|sinif\w*|ocak|şubat|mart|nisan|mayıs|haziran|temmuz|ağustos|eylül|ekim|kasım|aralık)\b/i.test(
+    !/\b(hafta\w*|dönem\w*|donem\w*|sınıf\w*|sinif\w*|ocak|şubat|subat|mart|nisan|mayıs|mayis|haziran|temmuz|ağustos|agustos|eylül|eylul|ekim|kasım|kasim|aralık|aralik)\b/i.test(
       cleanForOption
     )
       ? cleanForOption.match(
-          /^(?:seçenek\s*)?([1-8])(?:\s*(?:\.|numaralı|nolu)\s*(?:seçenek\w*|dosya\w*|belge\w*)?(?:\s*(?:paylaş\w*|gönder\w*|getir\w*|aç\w*))?)?$/i
+          /^(?:seçenek\s*|secenek\s*)?([1-8])(?:\s*(?:\.|numaralı|numarali|numarayı|numarayi|numara|nolu|ncı|nci|üncü|uncu)?\s*(?:seçenek[a-zA-Z0-9_çğıöşüÇĞİÖŞÜ'’]*|secenek[a-zA-Z0-9_çğıöşüÇĞİÖŞÜ'’]*|dosya[a-zA-Z0-9_çğıöşüÇĞİÖŞÜ'’]*|belge[a-zA-Z0-9_çğıöşüÇĞİÖŞÜ'’]*|doküman[a-zA-Z0-9_çğıöşüÇĞİÖŞÜ'’]*|dokuman[a-zA-Z0-9_çğıöşüÇĞİÖŞÜ'’]*)?(?:\s*(?:benimle|bana))?(?:\s*(?:paylaş[a-zA-Z0-9_çğıöşüÇĞİÖŞÜ'’]*|paylas[a-zA-Z0-9_çğıöşüÇĞİÖŞÜ'’]*|gönder[a-zA-Z0-9_çğıöşüÇĞİÖŞÜ'’]*|gonder[a-zA-Z0-9_çğıöşüÇĞİÖŞÜ'’]*|getir[a-zA-Z0-9_çğıöşüÇĞİÖŞÜ'’]*|aç[a-zA-Z0-9_çğıöşüÇĞİÖŞÜ'’]*|ac[a-zA-Z0-9_çğıöşüÇĞİÖŞÜ'’]*|indir[a-zA-Z0-9_çğıöşüÇĞİÖŞÜ'’]*))?)?[!.?]*$/i
         )
       : null;
 
-  if (optionMatch && cachedDriveSearchResults.length > 0) {
-    const idx = parseInt(optionMatch[1], 10) - 1;
-    if (idx >= 0 && idx < cachedDriveSearchResults.length) {
-      const chosen = cachedDriveSearchResults[idx];
+  const explicitDigitOption =
+    !optionMatch && /^[1-8]$/.test(queryText.trim())
+      ? [queryText.trim(), queryText.trim()]
+      : optionMatch;
+
+  if (explicitDigitOption) {
+    const cachedList = loadLastSearchResultsCache().driveFiles;
+    const idx = parseInt(explicitDigitOption[1], 10) - 1;
+    if (idx >= 0 && idx < cachedList.length) {
+      const chosen = cachedList[idx];
       return {
         ok: true,
         files: [chosen],
@@ -3683,7 +4081,10 @@ async function searchAndShareGoogleDriveFiles(
     }
   }
 
-  const constraints = parseDriveAndPhotoConstraints(queryText, rawTranscript);
+  const constraints = parseDriveAndPhotoConstraints(
+    normalizeSpokenTurkishNumbersAndDates(queryText),
+    normalizeSpokenTurkishNumbersAndDates(rawTranscript)
+  );
   let scopeMissing = false;
   let serviceDisabledUrl: string | undefined;
   let lastError: string | undefined;
@@ -3904,6 +4305,7 @@ async function searchAndShareGoogleDriveFiles(
 
     if (files.length > 0) {
       cachedDriveSearchResults = files;
+      saveLastSearchResultsCache({ driveFiles: files });
     } else {
       filterNote =
         `⚠️ Google Drive arşivinizde *"${queryText}"* kriterine uygun dosya bulunamadı (İlgisiz dosyalar listelenmemiştir).`;
@@ -3941,12 +4343,48 @@ async function searchAndShareGoogleDriveFiles(
 // MAIN ASSISTANT ENGINE ENTRYPOINT
 // ============================================================================
 
+/**
+ * Splits a multi-command voice or text utterance into sequential commands when the user
+ * chains multiple requests back-to-back ("peş peşe komut çalıştırma"), e.g.:
+ * - "Yarın 10:00'a toplantı ekle, ardından Topkapı Üniversitesi 6. hafta dosyalarını getir, daha sonra 19 Eylül 2026 fotoğraflarımı paylaş"
+ * - Multiple !toplanti / !drive / !foto / !not / !rehber commands in one message
+ */
+function splitIntoSequentialCommands(rawText: string): string[] {
+  const trimmed = rawText.trim();
+  if (!trimmed) return [];
+
+  // 1. Multiple explicit !komut triggers in the same message
+  const bangParts = trimmed
+    .split(/(?=(?:^|\s)!(?:toplanti|toplantı|takvim|etkinlik|rehber|kisi|kişi|not|is|iş|gorev|görev|foto|fotograf|fotoğraf|photos|drive|dosya|belge)\b)/i)
+    .map((s) => s.trim())
+    .filter(Boolean);
+  if (bangParts.length > 1) {
+    return bangParts;
+  }
+
+  // 2. Spoken/written sequential connectors ("ardından", "daha sonra", "ondan sonra", "peşinden", "akabinde", "ayrıca bir de", "sonrasında da")
+  const connectorRegex =
+    /(?:[,;.]|\s+)\b(?:ve\s+ardından|ardından\s+da|ardından|ve\s+daha\s+sonra|daha\s+sonra\s+da|daha\s+sonra|ondan\s+sonra\s+da|ondan\s+sonra|peşinden\s+de|peşinden|akabinde|ayrıca\s+bir\s+de|bir\s+de\s+bunun\s+yanında|sonrasında\s+da|hemen\s+ardından)\b[,:\s]*/gi;
+  if (connectorRegex.test(trimmed)) {
+    const parts = trimmed
+      .split(connectorRegex)
+      .map((s) => s.trim())
+      .filter((s) => s.length >= 6);
+    if (parts.length > 1) {
+      return parts;
+    }
+  }
+
+  return [trimmed];
+}
+
 export async function processAssistantInput(params: {
   text?: string;
   audioBase64?: string;
   mimeType?: string;
   isVoice?: boolean;
   credentials?: AssistantCredentials;
+  _skipChaining?: boolean;
 }): Promise<AssistantProcessResult> {
   loadFreshEnv();
 
@@ -4053,6 +4491,65 @@ export async function processAssistantInput(params: {
     };
   }
 
+  // Normalize spoken Turkish numbers & dates ("on yedi eylül iki bin yirmi altı" -> "17 Eylül 2026", "beş numarayı paylaş" -> "5 numarayı paylaş")
+  transcript = normalizeSpokenTurkishNumbersAndDates(transcript);
+
+  // Check for back-to-back sequential commands ("peş peşe komut çalıştırma")
+  if (!params._skipChaining) {
+    const subCommands = splitIntoSequentialCommands(transcript);
+    if (subCommands.length > 1) {
+      const subResults: AssistantProcessResult[] = [];
+      for (const cmdText of subCommands) {
+        const res = await processAssistantInput({
+          text: cmdText,
+          isVoice,
+          credentials: creds,
+          _skipChaining: true,
+        });
+        if (!res.duplicate && res.replyText) {
+          subResults.push(res);
+        }
+      }
+      if (subResults.length > 1) {
+        const stepBadges = ["1️⃣", "2️⃣", "3️⃣", "4️⃣", "5️⃣", "6️⃣"];
+        const combinedReply =
+          (isVoice
+            ? `🎙️ *Çoklu Sesli Komut Algılandı:* _"${transcript}"_\n\n`
+            : "") +
+          `⚡ *Peş Peşe ${subResults.length} Komut Başarıyla Çalıştırıldı!*\n\n` +
+          subResults
+            .map((r, idx) => {
+              const cleanStepReply = r.replyText.replace(
+                /^🎙️ \*Sesli Komut Algılandı:\* _"[^"]*"_\s*/i,
+                ""
+              );
+              return `${stepBadges[idx] || `${idx + 1}.`} *Komut ${idx + 1}:*\n${cleanStepReply}`;
+            })
+            .join("\n\n━━━━━━━━━━━━━━━━━━━━\n\n");
+
+        const lastRes = subResults[subResults.length - 1];
+        return {
+          transcript,
+          intent: lastRes.intent,
+          action: lastRes.action,
+          targetQuery: lastRes.targetQuery,
+          replyText: combinedReply,
+          usedGemini: subResults.some((r) => r.usedGemini),
+          syncedToGoogle: subResults.some((r) => r.syncedToGoogle),
+          chainedCount: subResults.length,
+          calendarEvent: subResults.find((r) => r.calendarEvent)?.calendarEvent,
+          contact: subResults.find((r) => r.contact)?.contact,
+          note: subResults.find((r) => r.note)?.note,
+          photos: subResults.find((r) => r.photos?.length)?.photos,
+          driveFiles: subResults.find((r) => r.driveFiles?.length)?.driveFiles,
+          selectedDriveFile: subResults.find((r) => r.selectedDriveFile)
+            ?.selectedDriveFile,
+          selectedPhoto: subResults.find((r) => r.selectedPhoto)?.selectedPhoto,
+        };
+      }
+    }
+  }
+
   const localParsed = parseCommandLocally(transcript, isVoice);
 
   if (
@@ -4078,8 +4575,12 @@ export async function processAssistantInput(params: {
     localParsed.intent === "drive"
   ) {
     parsed.intent = localParsed.intent;
+    parsed.action = localParsed.action;
     if (localParsed.targetQuery) {
       parsed.targetQuery = localParsed.targetQuery;
+    }
+    if (localParsed.recipientQuery && !parsed.recipientQuery) {
+      parsed.recipientQuery = localParsed.recipientQuery;
     }
   }
 
@@ -4751,6 +5252,32 @@ export async function processAssistantInput(params: {
       ].slice(0, 20);
     }
 
+    if (photoRes.selectedOption) {
+      const p = photoRes.selectedOption;
+      const replyText =
+        (isVoice
+          ? `🎙️ *Sesli Komut Algılandı:* _"${transcript}"_\n\n`
+          : "") +
+        `✅ *Seçilen Fotoğraf Paylaşıldı! (#${photoQuery})*\n\n` +
+        `📸 *${p.title}*\n` +
+        `🗓️ *Tarih:* ${p.date}\n` +
+        `📂 *Albüm / Konum:* ${p.albumOrLocation || p.source}\n` +
+        `🔗 *Doğrudan Görüntüle / İndir:* ${p.url}`;
+
+      return {
+        transcript,
+        intent: "photos",
+        action: "share",
+        targetQuery: photoQuery,
+        replyText: replyText.trim(),
+        usedGemini,
+        syncedToGoogle,
+        googleSyncError,
+        photos: [p],
+        selectedPhoto: p,
+      };
+    }
+
     const numBadges = ["1️⃣", "2️⃣", "3️⃣", "4️⃣", "5️⃣", "6️⃣", "7️⃣", "8️⃣"];
     const noteHeader = photoRes.filterNote ? `${photoRes.filterNote}\n\n` : "";
     const listLines =
@@ -4768,6 +5295,11 @@ export async function processAssistantInput(params: {
           ? ""
           : `⚠️ *"${photoQuery}"* aramasına uygun fotoğraf bulunamadı.`;
 
+    const optionHint =
+      photoRes.photos.length > 1
+        ? `\n\n💡 _Listedeki bir fotoğrafı tek başına büyütüp paylaşmak için "1 numaralı fotoğrafı paylaş" diyebilirsiniz._`
+        : "";
+
     const permissionHint = photoRes.scopeMissing
       ? `\n\n🔑 *Google Photos & Drive İzni:* Fotoğraf ve albümlerinize erişim için tarayıcıdan 1 kez şu bağlantıyı onaylayın: http://localhost:3000/api/auth/google`
       : photoRes.serviceDisabledUrl
@@ -4779,7 +5311,7 @@ export async function processAssistantInput(params: {
         ? `🎙️ *Sesli Komut Algılandı:* _"${transcript}"_\n\n`
         : "") +
       `📸 *Google Photos & Galeri Sonuçları (${photoQuery})*\n\n` +
-      `${noteHeader}${listLines}${permissionHint}`;
+      `${noteHeader}${listLines}${optionHint}${permissionHint}`;
 
     return {
       transcript,
@@ -4816,6 +5348,45 @@ export async function processAssistantInput(params: {
       ].slice(0, 20);
     }
 
+    if (driveRes.selectedOption) {
+      const f = driveRes.selectedOption;
+      const sharedInfo =
+        driveRes.invitedEmails.length > 0
+          ? `\n📨 *E-posta ile Paylaşılan Alıcı:* ${
+              driveRes.resolvedContactName
+                ? `${driveRes.resolvedContactName} (${driveRes.invitedEmails.join(", ")})`
+                : driveRes.invitedEmails.join(", ")
+            }`
+          : "";
+
+      const replyText =
+        (isVoice
+          ? `🎙️ *Sesli Komut Algılandı:* _"${transcript}"_\n\n`
+          : "") +
+        `✅ *Seçilen Google Drive Dosyası Paylaşıldı! (#${driveQuery})*\n\n` +
+        `📄 *Dosya Adı:* ${f.name} (${f.typeLabel}${f.sizeLabel ? ` • ${f.sizeLabel}` : ""})\n` +
+        `🗓️ *Güncelleme:* ${f.modifiedDate}` +
+        (f.folderPath ? ` • 📂 *Klasör:* ${f.folderPath}` : "") +
+        `\n` +
+        (f.snippet ? `📝 *İçerik Özeti:* _"${f.snippet}"_\n` : "") +
+        `🔗 *Doğrudan Açma / İndirme Linki:* ${f.webViewLink}` +
+        (f.webContentLink ? `\n📥 *Direkt İndir:* ${f.webContentLink}` : "") +
+        sharedInfo;
+
+      return {
+        transcript,
+        intent: "drive",
+        action: "share",
+        targetQuery: driveQuery,
+        replyText: replyText.trim(),
+        usedGemini,
+        syncedToGoogle,
+        googleSyncError,
+        driveFiles: [f],
+        selectedDriveFile: f,
+      };
+    }
+
     const numBadges = ["1️⃣", "2️⃣", "3️⃣", "4️⃣", "5️⃣", "6️⃣"];
     const folderBanner = driveRes.matchedFolderLabel
       ? `📂 *Eşleşen Klasör:* ${driveRes.matchedFolderLabel}\n\n`
@@ -4846,7 +5417,7 @@ export async function processAssistantInput(params: {
               ? `${driveRes.resolvedContactName} (${driveRes.invitedEmails.join(", ")})`
               : driveRes.invitedEmails.join(", ")
           }`
-        : `\n\n💡 _Seçeneklerden birini paylaşmak veya detayını görmek için "1 numaralı dosyayı paylaş" diyebilirsiniz._`;
+        : `\n\n💡 _Seçeneklerden birini doğrudan WhatsApp'a dosya olarak indirmek veya paylaşmak için "1 numarayı paylaş" veya "5 numaralı dosyayı paylaş" diyebilirsiniz._`;
 
     const permissionHint = driveRes.scopeMissing
       ? `\n\n🔑 *Google Drive İzni Gerekiyor:* Drive dosyalarınıza erişim için tarayıcıdan 1 kez şu bağlantıyı onaylayın: http://localhost:3000/api/auth/google`
@@ -4871,6 +5442,8 @@ export async function processAssistantInput(params: {
       syncedToGoogle,
       googleSyncError,
       driveFiles: driveRes.files,
+      selectedDriveFile:
+        driveRes.files.length === 1 ? driveRes.files[0] : undefined,
     };
   }
 

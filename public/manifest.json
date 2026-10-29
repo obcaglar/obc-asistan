@@ -1,9 +1,18 @@
 {
-  "name": "OBC WhatsApp & Google Asistanı (+905491007729)",
+  "name": "OBC WhatsApp & Google Workspace Sesli Asistanı (+905491007729)",
   "short_name": "OBC Asistan",
-  "description": "7/24 Bulut Tabanlı WhatsApp & Google Takvim/Rehber Sesli ve Yazılı Asistanı",
+  "description": "7/24 Bulut Tabanlı WhatsApp Sesli Arama, Peş Peşe Komut, Google Takvim, Rehber, Tasks, Photos ve Drive Asistanı",
   "start_url": "/",
   "display": "standalone",
+  "orientation": "portrait",
   "background_color": "#0f172a",
-  "theme_color": "#075E54"
+  "theme_color": "#075E54",
+  "shortcuts": [
+    {
+      "name": "📞 Canlı Sesli Ara (Peş Peşe Komut)",
+      "short_name": "Sesli Ara",
+      "description": "Asistanı WhatsApp tarzı canlı sesli arayarak peş peşe komut çalıştırın",
+      "url": "/?call=1"
+    }
+  ]
 }

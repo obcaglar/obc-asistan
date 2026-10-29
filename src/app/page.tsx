@@ -5,6 +5,8 @@ import type {
   CalendarItem,
   ContactItem,
   NoteItem,
+  PhotoItem,
+  DriveFileItem,
   AssistantProcessResult,
 } from "@/lib/assistant-engine";
 import {
@@ -19,6 +21,7 @@ import {
 
 type TabType =
   | "chat"
+  | "media"
   | "calendar"
   | "contacts"
   | "notes"
@@ -59,6 +62,8 @@ export default function HomePage() {
   const [contactsList, setContactsList] =
     useState<ContactItem[]>(INITIAL_CONTACTS);
   const [notesList, setNotesList] = useState<NoteItem[]>(INITIAL_NOTES);
+  const [photosList, setPhotosList] = useState<PhotoItem[]>([]);
+  const [driveFilesList, setDriveFilesList] = useState<DriveFileItem[]>([]);
   const [chatMessages, setChatMessages] = useState<ChatMessage[]>(
     INITIAL_CHAT_MESSAGES
   );
@@ -69,12 +74,35 @@ export default function HomePage() {
   const [botTypingText, setBotTypingText] = useState(
     "Ses çözümleniyor & Google API çağrılıyor..."
   );
+  const [showMobileQuickPanel, setShowMobileQuickPanel] = useState(false);
 
   // Voice recording state
   const [isRecording, setIsRecording] = useState(false);
   const [recordSeconds, setRecordSeconds] = useState(0);
   const [liveTranscript, setLiveTranscript] = useState("");
   const [playingMsgId, setPlayingMsgId] = useState<string | null>(null);
+
+  // WhatsApp Live Voice Call & Continuous Back-to-Back Command Chaining state
+  const [isVoiceCallOpen, setIsVoiceCallOpen] = useState(false);
+  const [callDurationSec, setCallDurationSec] = useState(0);
+  const [callStatus, setCallStatus] = useState<
+    "listening" | "processing" | "speaking" | "paused"
+  >("listening");
+  const [callHandsFree, setCallHandsFree] = useState(true);
+  const [callTtsEnabled, setCallTtsEnabled] = useState(true);
+  const [callLiveTranscript, setCallLiveTranscript] = useState("");
+  const [callManualInput, setCallManualInput] = useState("");
+  const [callHistory, setCallHistory] = useState<
+    Array<{
+      id: string;
+      time: string;
+      command: string;
+      replySummary: string;
+      intent: string;
+      syncedToGoogle: boolean;
+      chainedCount?: number;
+    }>
+  >([]);
 
   // Backend & Antigravity tabs
   const [currentBackendTab, setCurrentBackendTab] =
@@ -117,6 +145,16 @@ export default function HomePage() {
 
   const chatContainerRef = useRef<HTMLDivElement | null>(null);
   const recordIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const callTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const callSilenceTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(
+    null
+  );
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const callSpeechRecRef = useRef<any>(null);
+  const callActiveRef = useRef<boolean>(false);
+  const callHandsFreeRef = useRef<boolean>(true);
+  const callTtsRef = useRef<boolean>(true);
+  const callTranscriptBufferRef = useRef<string>("");
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const speechRecognitionRef = useRef<any>(null);
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
@@ -153,11 +191,31 @@ export default function HomePage() {
       // Ignore storage errors
     }
 
+    // Auto-open WhatsApp Live Voice Call if ?call=1 is present in URL
+    if (
+      typeof window !== "undefined" &&
+      window.location.search.includes("call=1")
+    ) {
+      setTimeout(() => {
+        setIsVoiceCallOpen(true);
+        callActiveRef.current = true;
+      }, 300);
+    }
+
     fetch("/api/assistant")
       .then((r) => r.json())
       .then((data) => {
         if (data?.envStatus) {
           setServerEnvStatus(data.envStatus);
+        }
+        if (data?.recentWebhookEvents) {
+          const { photos, driveFiles } = data.recentWebhookEvents;
+          if (Array.isArray(photos) && photos.length > 0) {
+            setPhotosList(photos);
+          }
+          if (Array.isArray(driveFiles) && driveFiles.length > 0) {
+            setDriveFilesList(driveFiles);
+          }
         }
       })
       .catch(() => {});
@@ -167,7 +225,8 @@ export default function HomePage() {
         .then((r) => r.json())
         .then((data) => {
           if (data?.recentWebhookEvents) {
-            const { calendars, contacts, notes } = data.recentWebhookEvents;
+            const { calendars, contacts, notes, photos, driveFiles } =
+              data.recentWebhookEvents;
             if (Array.isArray(calendars) && calendars.length > 0) {
               setCalendarEvents((prev) => {
                 const existingIds = new Set(prev.map((x) => x.id));
@@ -194,6 +253,12 @@ export default function HomePage() {
                 );
                 return fresh.length > 0 ? [...fresh, ...prev] : prev;
               });
+            }
+            if (Array.isArray(photos) && photos.length > 0) {
+              setPhotosList(photos);
+            }
+            if (Array.isArray(driveFiles) && driveFiles.length > 0) {
+              setDriveFilesList(driveFiles);
             }
           }
         })
@@ -447,9 +512,40 @@ export default function HomePage() {
             : "📝 Not başarıyla kaydedildi!"
         );
       } else if (result.intent === "photos") {
+        if (Array.isArray(result.photos) && result.photos.length > 0) {
+          setPhotosList((prev) => {
+            const existingIds = new Set(prev.map((p) => p.id));
+            const fresh = result.photos!.filter((p) => !existingIds.has(p.id));
+            return [...fresh, ...prev].slice(0, 24);
+          });
+        }
         showToast("📸 Google Photos ve Galeri sonuçları getirildi!");
       } else if (result.intent === "drive") {
+        if (Array.isArray(result.driveFiles) && result.driveFiles.length > 0) {
+          setDriveFilesList((prev) => {
+            const existingIds = new Set(prev.map((f) => f.id));
+            const fresh = result.driveFiles!.filter(
+              (f) => !existingIds.has(f.id)
+            );
+            return [...fresh, ...prev].slice(0, 24);
+          });
+        }
         showToast("📁 Google Drive dosya ve içerik seçenekleri listelendi!");
+      }
+
+      if (Array.isArray(result.photos) && result.photos.length > 0) {
+        setPhotosList((prev) => {
+          const existingIds = new Set(prev.map((p) => p.id));
+          const fresh = result.photos!.filter((p) => !existingIds.has(p.id));
+          return [...fresh, ...prev].slice(0, 24);
+        });
+      }
+      if (Array.isArray(result.driveFiles) && result.driveFiles.length > 0) {
+        setDriveFilesList((prev) => {
+          const existingIds = new Set(prev.map((f) => f.id));
+          const fresh = result.driveFiles!.filter((f) => !existingIds.has(f.id));
+          return [...fresh, ...prev].slice(0, 24);
+        });
       }
 
       const now = new Date().toLocaleTimeString("tr-TR", {
@@ -472,11 +568,258 @@ export default function HomePage() {
       ]);
 
       playTone(800, 0.1, "triangle");
+      return result;
     } catch {
       setIsBotTyping(false);
       showToast("İstek işlenirken bir bağlantı hatası oluştu.");
+      return null;
     }
   }
+
+  // ==================== WHATSAPP LIVE VOICE CALL & CONTINUOUS COMMAND CHAINING ====================
+  function speakTurkishText(text: string, onDone?: () => void) {
+    if (
+      typeof window === "undefined" ||
+      !window.speechSynthesis ||
+      !callTtsRef.current
+    ) {
+      if (onDone) onDone();
+      return;
+    }
+    try {
+      window.speechSynthesis.cancel();
+      const cleanForSpeech = text
+        .replace(/https?:\/\/\S+/g, "")
+        .replace(/[*_`~#•1️⃣2️⃣3️⃣4️⃣5️⃣6️⃣7️⃣8️⃣📅🔄🗑️📨👤📝📋📸📁✅⚠️🎙️💡📂🔗🗓️🏢📞✉️🔔👥📍]/g, " ")
+        .replace(/\s+/g, " ")
+        .trim()
+        .slice(0, 260);
+
+      const utter = new SpeechSynthesisUtterance(
+        cleanForSpeech || "Komutunuz çalıştırıldı. Sıradaki komutunuzu dinliyorum."
+      );
+      utter.lang = "tr-TR";
+      utter.rate = 1.08;
+      utter.onend = () => {
+        if (onDone) onDone();
+      };
+      utter.onerror = () => {
+        if (onDone) onDone();
+      };
+      window.speechSynthesis.speak(utter);
+    } catch {
+      if (onDone) onDone();
+    }
+  }
+
+  function stopCallRecognitionOnly() {
+    if (callSilenceTimeoutRef.current) {
+      clearTimeout(callSilenceTimeoutRef.current);
+      callSilenceTimeoutRef.current = null;
+    }
+    if (callSpeechRecRef.current) {
+      try {
+        callSpeechRecRef.current.onend = null;
+        callSpeechRecRef.current.stop();
+      } catch {}
+      callSpeechRecRef.current = null;
+    }
+  }
+
+  function startCallListeningCycle() {
+    if (!callActiveRef.current) return;
+    stopCallRecognitionOnly();
+    callTranscriptBufferRef.current = "";
+    setCallLiveTranscript("");
+    setCallStatus("listening");
+
+    const SpeechRecognition =
+      typeof window !== "undefined"
+        ? window.SpeechRecognition || window.webkitSpeechRecognition
+        : null;
+    if (!SpeechRecognition) return;
+
+    try {
+      const rec = new SpeechRecognition();
+      rec.lang = "tr-TR";
+      rec.continuous = true;
+      rec.interimResults = true;
+
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      rec.onresult = (event: any) => {
+        if (!callActiveRef.current) return;
+        let interim = "";
+        let finalAcc = "";
+        for (let i = 0; i < event.results.length; ++i) {
+          if (event.results[i].isFinal) {
+            finalAcc += event.results[i][0].transcript + " ";
+          } else {
+            interim += event.results[i][0].transcript;
+          }
+        }
+        const combined = (finalAcc + interim).trim();
+        if (combined) {
+          callTranscriptBufferRef.current = combined;
+          setCallLiveTranscript(combined);
+
+          // Hands-free auto-dispatch after 1.9 seconds of silence
+          if (callHandsFreeRef.current) {
+            if (callSilenceTimeoutRef.current) {
+              clearTimeout(callSilenceTimeoutRef.current);
+            }
+            callSilenceTimeoutRef.current = setTimeout(() => {
+              const spoken = callTranscriptBufferRef.current.trim();
+              if (spoken.length >= 3 && callActiveRef.current) {
+                executeCallCommand(spoken);
+              }
+            }, 1900);
+          }
+        }
+      };
+
+      rec.onend = () => {
+        // If still in listening state and call is active, keep mic alive continuously
+        if (
+          callActiveRef.current &&
+          !callTranscriptBufferRef.current.trim()
+        ) {
+          try {
+            rec.start();
+          } catch {}
+        }
+      };
+
+      rec.start();
+      callSpeechRecRef.current = rec;
+    } catch {}
+  }
+
+  async function executeCallCommand(rawCommandText: string) {
+    const command = rawCommandText.trim();
+    if (!command) return;
+
+    stopCallRecognitionOnly();
+    callTranscriptBufferRef.current = "";
+    setCallLiveTranscript(command);
+    setCallStatus("processing");
+    playTone(520, 0.08, "sine");
+
+    const now = new Date().toLocaleTimeString("tr-TR", {
+      hour: "2-digit",
+      minute: "2-digit",
+    });
+
+    setChatMessages((prev) => [
+      ...prev,
+      {
+        id: "msg-call-" + Date.now(),
+        sender: "user",
+        text: command,
+        transcript: command,
+        duration: "Canlı Arama",
+        time: now,
+        type: "audio",
+        meta: null,
+      },
+    ]);
+
+    const result = await processCommandThroughApi({
+      text: command,
+      isVoice: true,
+    });
+
+    const summaryLine =
+      result?.replyText
+        ?.split("\n")
+        .filter((l) => l.trim() && !l.includes("Sesli Komut Algılandı"))
+        .slice(0, 3)
+        .join(" • ") || "Komut işlendi.";
+
+    setCallHistory((prev) => [
+      {
+        id: "ch-" + Date.now(),
+        time: now,
+        command,
+        replySummary: summaryLine,
+        intent: result?.intent || "help",
+        syncedToGoogle: Boolean(result?.syncedToGoogle),
+        chainedCount: result?.chainedCount,
+      },
+      ...prev,
+    ]);
+
+    setCallLiveTranscript("");
+
+    if (!callActiveRef.current) return;
+
+    setCallStatus("speaking");
+    const voiceSummary = result?.chainedCount
+      ? `Peş peşe ${result.chainedCount} komut başarıyla çalıştırıldı. Sıradaki komutunuzu dinliyorum.`
+      : `${summaryLine}. Sıradaki komutunuzu dinliyorum.`;
+
+    speakTurkishText(voiceSummary, () => {
+      if (callActiveRef.current) {
+        startCallListeningCycle();
+      }
+    });
+  }
+
+  function startWhatsAppVoiceCall() {
+    callActiveRef.current = true;
+    setIsVoiceCallOpen(true);
+    setCallDurationSec(0);
+    setCallLiveTranscript("");
+    playTone(660, 0.14, "sine");
+    setTimeout(() => playTone(880, 0.16, "sine"), 160);
+
+    if (callTimerRef.current) clearInterval(callTimerRef.current);
+    callTimerRef.current = setInterval(() => {
+      setCallDurationSec((s) => s + 1);
+    }, 1000);
+
+    setCallStatus("speaking");
+    speakTurkishText(
+      "Merhaba! WhatsApp canlı sesli asistanınız hazır. Takvim, Rehber, Görevler, Google Photos ve Drive komutlarınızı peş peşe söyleyebilirsiniz.",
+      () => {
+        if (callActiveRef.current) {
+          startCallListeningCycle();
+        }
+      }
+    );
+  }
+
+  function endWhatsAppVoiceCall() {
+    callActiveRef.current = false;
+    stopCallRecognitionOnly();
+    if (callTimerRef.current) {
+      clearInterval(callTimerRef.current);
+      callTimerRef.current = null;
+    }
+    if (typeof window !== "undefined" && window.speechSynthesis) {
+      try {
+        window.speechSynthesis.cancel();
+      } catch {}
+    }
+    playTone(340, 0.18, "sawtooth");
+    setIsVoiceCallOpen(false);
+    setCallStatus("paused");
+    showToast("📞 Canlı sesli arama sonlandırıldı.");
+  }
+
+  useEffect(() => {
+    callHandsFreeRef.current = callHandsFree;
+  }, [callHandsFree]);
+
+  useEffect(() => {
+    callTtsRef.current = callTtsEnabled;
+  }, [callTtsEnabled]);
+
+  useEffect(() => {
+    if (isVoiceCallOpen && callDurationSec === 0 && !callTimerRef.current) {
+      startWhatsAppVoiceCall();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isVoiceCallOpen]);
 
   function handleSendTextMessage(e: React.FormEvent) {
     e.preventDefault();
@@ -1020,16 +1363,24 @@ WHATSAPP_VERIFY_TOKEN=${waverify}`;
             </div>
           </div>
 
-          <div className="flex items-center gap-2.5 flex-wrap">
+          <div className="flex items-center gap-2 flex-wrap">
             <button
-              onClick={downloadCompleteProjectZip}
-              className="px-3.5 py-1.5 bg-gradient-to-r from-emerald-500 to-teal-500 hover:from-emerald-400 hover:to-teal-400 text-slate-950 text-xs font-extrabold rounded-xl flex items-center gap-2 shadow-lg shadow-emerald-900/40 transition transform active:scale-95 cursor-pointer"
+              onClick={startWhatsAppVoiceCall}
+              className="px-3.5 py-1.5 bg-gradient-to-r from-green-500 via-emerald-500 to-teal-400 hover:from-green-400 hover:to-teal-300 text-slate-950 text-xs font-extrabold rounded-xl flex items-center gap-2 shadow-lg shadow-emerald-900/50 transition transform active:scale-95 cursor-pointer animate-pulse"
             >
-              <i className="fa-solid fa-file-zipper text-sm"></i>
-              <span>📦 Projeyi İndir (.ZIP)</span>
+              <i className="fa-solid fa-phone-volume text-sm"></i>
+              <span>📞 Sesli Ara (Peş Peşe Komut)</span>
             </button>
 
-            <nav className="flex items-center space-x-1 bg-slate-800/80 p-1 rounded-xl border border-slate-700/60 text-xs overflow-x-auto">
+            <button
+              onClick={downloadCompleteProjectZip}
+              className="hidden sm:flex px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-emerald-300 border border-emerald-500/30 text-xs font-bold rounded-xl items-center gap-1.5 transition cursor-pointer"
+            >
+              <i className="fa-solid fa-file-zipper text-xs"></i>
+              <span>📦 .ZIP</span>
+            </button>
+
+            <nav className="hidden md:flex items-center space-x-1 bg-slate-800/80 p-1 rounded-xl border border-slate-700/60 text-xs overflow-x-auto">
               <button
                 onClick={() => setActiveTab("chat")}
                 className={`px-3 py-1.5 rounded-lg font-medium transition flex items-center gap-1.5 cursor-pointer ${
@@ -1039,7 +1390,22 @@ WHATSAPP_VERIFY_TOKEN=${waverify}`;
                 }`}
               >
                 <i className="fa-brands fa-whatsapp"></i>
-                <span>WhatsApp Simülatörü</span>
+                <span>WhatsApp Asistan</span>
+              </button>
+
+              <button
+                onClick={() => setActiveTab("media")}
+                className={`px-3 py-1.5 rounded-lg font-medium transition flex items-center gap-1.5 cursor-pointer ${
+                  activeTab === "media"
+                    ? "bg-emerald-600 text-white shadow-xs"
+                    : "text-slate-300 hover:text-white hover:bg-slate-700/60"
+                }`}
+              >
+                <i className="fa-regular fa-images text-pink-400"></i>
+                <span>Photos & Drive</span>
+                <span className="bg-pink-600/30 text-pink-300 text-[10px] px-1.5 py-0.2 rounded-full font-mono">
+                  {photosList.length + driveFilesList.length}
+                </span>
               </button>
 
               <button
@@ -1051,7 +1417,7 @@ WHATSAPP_VERIFY_TOKEN=${waverify}`;
                 }`}
               >
                 <i className="fa-regular fa-calendar-check text-blue-400"></i>
-                <span>Google Takvim</span>
+                <span>Takvim</span>
                 <span className="bg-blue-600/30 text-blue-300 text-[10px] px-1.5 py-0.2 rounded-full font-mono">
                   {calendarEvents.length}
                 </span>
@@ -1066,7 +1432,7 @@ WHATSAPP_VERIFY_TOKEN=${waverify}`;
                 }`}
               >
                 <i className="fa-regular fa-address-book text-emerald-400"></i>
-                <span>Google Kişiler</span>
+                <span>Kişiler</span>
                 <span className="bg-emerald-600/30 text-emerald-300 text-[10px] px-1.5 py-0.2 rounded-full font-mono">
                   {contactsList.length}
                 </span>
@@ -1081,7 +1447,7 @@ WHATSAPP_VERIFY_TOKEN=${waverify}`;
                 }`}
               >
                 <i className="fa-regular fa-note-sticky text-amber-400"></i>
-                <span>Not Defteri</span>
+                <span>Görevler</span>
                 <span className="bg-amber-600/30 text-amber-300 text-[10px] px-1.5 py-0.2 rounded-full font-mono">
                   {notesList.length}
                 </span>
@@ -1096,7 +1462,7 @@ WHATSAPP_VERIFY_TOKEN=${waverify}`;
                 }`}
               >
                 <i className="fa-solid fa-server text-purple-400"></i>
-                <span>Canlı Kurulum</span>
+                <span>Kurulum</span>
               </button>
 
               <button
@@ -1108,22 +1474,7 @@ WHATSAPP_VERIFY_TOKEN=${waverify}`;
                 }`}
               >
                 <i className="fa-solid fa-triangle-exclamation rotate-180 text-white"></i>
-                <span>GitHub & Vercel</span>
-              </button>
-
-              <button
-                onClick={() => setActiveTab("antigravity")}
-                className={`px-3 py-1.5 rounded-lg font-medium transition flex items-center gap-1.5 cursor-pointer ${
-                  activeTab === "antigravity"
-                    ? "bg-emerald-600 text-white shadow-xs"
-                    : "text-slate-300 hover:text-white hover:bg-slate-700/60"
-                }`}
-              >
-                <i className="fa-solid fa-wand-magic-sparkles text-pink-400"></i>
-                <span>Antigravity Aktarım</span>
-                <span className="bg-pink-500/20 text-pink-300 text-[9px] px-1.5 py-0.2 rounded-full font-bold border border-pink-500/30">
-                  HAZIR
-                </span>
+                <span>Bulut</span>
               </button>
             </nav>
           </div>
@@ -1131,10 +1482,10 @@ WHATSAPP_VERIFY_TOKEN=${waverify}`;
       </header>
 
       {/* MAIN CONTENT */}
-      <main className="flex-1 flex overflow-hidden relative">
+      <main className="flex-1 flex overflow-hidden relative pb-14 md:pb-0">
         {/* TOAST */}
         <div
-          className={`fixed bottom-4 right-4 z-50 transform transition-all duration-300 flex items-center gap-2.5 bg-slate-900 text-white px-4 py-3 rounded-xl shadow-2xl border border-slate-700 text-xs pointer-events-none ${
+          className={`fixed bottom-16 md:bottom-4 right-4 z-50 transform transition-all duration-300 flex items-center gap-2.5 bg-slate-900 text-white px-4 py-3 rounded-xl shadow-2xl border border-slate-700 text-xs pointer-events-none ${
             toastMsg ? "translate-y-0 opacity-100" : "translate-y-16 opacity-0"
           }`}
         >
@@ -1145,19 +1496,94 @@ WHATSAPP_VERIFY_TOKEN=${waverify}`;
         {/* ==================== TAB 1: WHATSAPP SIMULATOR ==================== */}
         {activeTab === "chat" && (
           <section className="flex-1 flex flex-col md:flex-row h-full overflow-hidden">
-            {/* Left Sidebar */}
-            <aside className="w-full md:w-80 lg:w-96 bg-white border-r border-slate-200 flex flex-col shrink-0 overflow-y-auto custom-scrollbar p-4 space-y-4">
+            {/* Left Sidebar (Collapsible on Mobile) */}
+            <aside
+              className={`${
+                showMobileQuickPanel ? "flex" : "hidden md:flex"
+              } w-full md:w-80 lg:w-96 bg-white border-r border-slate-200 flex-col shrink-0 overflow-y-auto custom-scrollbar p-4 space-y-4 max-h-[55vh] md:max-h-none border-b md:border-b-0`}
+            >
               <div>
-                <h2 className="text-xs font-bold text-slate-400 uppercase tracking-wider mb-2 flex items-center gap-1.5">
-                  <i className="fa-solid fa-microphone-lines text-teal-600"></i>
-                  Canlı Sesli Test Senaryoları
+                <h2 className="text-xs font-bold text-slate-400 uppercase tracking-wider mb-2 flex items-center justify-between">
+                  <span className="flex items-center gap-1.5">
+                    <i className="fa-solid fa-microphone-lines text-teal-600"></i>
+                    Canlı Sesli & Peş Peşe Test Senaryoları
+                  </span>
+                  <button
+                    onClick={() => setShowMobileQuickPanel(false)}
+                    className="md:hidden text-slate-400 hover:text-slate-700 text-xs"
+                  >
+                    Kapat ✕
+                  </button>
                 </h2>
                 <p className="text-xs text-slate-500 mb-3">
-                  Aşağıdaki butonlara tıklayarak WhatsApp sesli mesajı (PTT)
-                  gibi komut verin:
+                  Tek tıkla sesli komut veya peş peşe zincirleme komut
+                  gönderin:
                 </p>
 
                 <div className="space-y-2">
+                  <button
+                    onClick={() =>
+                      triggerVoiceSample(
+                        "Yarın saat 10:00'da bütçe toplantısı ekle, ardından Topkapı üniversitesi klasörümdeki 6. hafta dosyalarını getir, daha sonra 19 Eylül 2026 fotoğraflarımı paylaş"
+                      )
+                    }
+                    className="w-full text-left p-2.5 rounded-xl border border-purple-300 bg-purple-50/80 hover:bg-purple-100/80 transition flex items-center justify-between group cursor-pointer"
+                  >
+                    <div>
+                      <span className="text-xs font-bold text-purple-900 flex items-center gap-1.5">
+                        <i className="fa-solid fa-bolt text-purple-600 group-hover:scale-110 transition"></i>{" "}
+                        Peş Peşe 3 Sesli Komut (Takvim + Drive + Photos)
+                      </span>
+                      <span className="text-[11px] text-purple-700/90 line-clamp-1">
+                        &quot;Yarın 10:00 toplantı ekle, ardından 6. hafta
+                        dosyalarını getir, daha sonra 19 Eylül 2026...&quot;
+                      </span>
+                    </div>
+                    <i className="fa-solid fa-circle-play text-purple-600 text-sm"></i>
+                  </button>
+
+                  <button
+                    onClick={() =>
+                      triggerVoiceSample(
+                        "Topkapı üniversitesi klasörümdeki 6. hafta dosyalarını seçenekler halinde getir"
+                      )
+                    }
+                    className="w-full text-left p-2.5 rounded-xl border border-blue-200 bg-blue-50/70 hover:bg-blue-100/80 transition flex items-center justify-between group cursor-pointer"
+                  >
+                    <div>
+                      <span className="text-xs font-bold text-blue-900 flex items-center gap-1.5">
+                        <i className="fa-brands fa-google-drive text-blue-600 group-hover:scale-110 transition"></i>{" "}
+                        Ses: Google Drive Klasör &amp; Hafta Arama
+                      </span>
+                      <span className="text-[11px] text-blue-700/90 line-clamp-1">
+                        &quot;Topkapı üniversitesi klasörümdeki 6. hafta
+                        dosyalarını getir&quot;
+                      </span>
+                    </div>
+                    <i className="fa-solid fa-circle-play text-blue-600 text-sm"></i>
+                  </button>
+
+                  <button
+                    onClick={() =>
+                      triggerVoiceSample(
+                        "19 Eylül 2026 tarihindeki fotoğraflarımı paylaş"
+                      )
+                    }
+                    className="w-full text-left p-2.5 rounded-xl border border-pink-200 bg-pink-50/70 hover:bg-pink-100/80 transition flex items-center justify-between group cursor-pointer"
+                  >
+                    <div>
+                      <span className="text-xs font-bold text-pink-900 flex items-center gap-1.5">
+                        <i className="fa-regular fa-images text-pink-600 group-hover:scale-110 transition"></i>{" "}
+                        Ses: Google Photos Tarih &amp; Kişi Arama
+                      </span>
+                      <span className="text-[11px] text-pink-700/90 line-clamp-1">
+                        &quot;19 Eylül 2026 tarihindeki fotoğraflarımı
+                        paylaş&quot;
+                      </span>
+                    </div>
+                    <i className="fa-solid fa-circle-play text-pink-600 text-sm"></i>
+                  </button>
+
                   <button
                     onClick={() =>
                       triggerVoiceSample(
@@ -1178,47 +1604,6 @@ WHATSAPP_VERIFY_TOKEN=${waverify}`;
                     </div>
                     <i className="fa-solid fa-circle-play text-teal-600 text-sm"></i>
                   </button>
-
-                  <button
-                    onClick={() =>
-                      triggerVoiceSample(
-                        "Rehbere kaydet: Avukat Selin Arslan, telefon 0532 999 1122, şirket Arslan Hukuk"
-                      )
-                    }
-                    className="w-full text-left p-2.5 rounded-xl border border-emerald-200 bg-emerald-50/70 hover:bg-emerald-100/80 transition flex items-center justify-between group cursor-pointer"
-                  >
-                    <div>
-                      <span className="text-xs font-bold text-emerald-900 flex items-center gap-1.5">
-                        <i className="fa-solid fa-user-plus text-emerald-600 group-hover:scale-110 transition"></i>{" "}
-                        Ses: Kişi Kaydet
-                      </span>
-                      <span className="text-[11px] text-emerald-700/90 line-clamp-1">
-                        &quot;Rehbere kaydet: Avukat Selin Arslan...&quot;
-                      </span>
-                    </div>
-                    <i className="fa-solid fa-circle-play text-emerald-600 text-sm"></i>
-                  </button>
-
-                  <button
-                    onClick={() =>
-                      triggerVoiceSample(
-                        "Not al: Haftalık sunucu yedeklerini kontrol et ve SSL sertifikasını yenile"
-                      )
-                    }
-                    className="w-full text-left p-2.5 rounded-xl border border-amber-200 bg-amber-50/70 hover:bg-amber-100/80 transition flex items-center justify-between group cursor-pointer"
-                  >
-                    <div>
-                      <span className="text-xs font-bold text-amber-900 flex items-center gap-1.5">
-                        <i className="fa-solid fa-note-sticky text-amber-600 group-hover:scale-110 transition"></i>{" "}
-                        Ses: Hızlı Not Al
-                      </span>
-                      <span className="text-[11px] text-amber-700/90 line-clamp-1">
-                        &quot;Not al: Haftalık sunucu yedeklerini
-                        kontrol...&quot;
-                      </span>
-                    </div>
-                    <i className="fa-solid fa-circle-play text-amber-600 text-sm"></i>
-                  </button>
                 </div>
               </div>
 
@@ -1230,6 +1615,29 @@ WHATSAPP_VERIFY_TOKEN=${waverify}`;
                   Yazılı Komut Formatları
                 </h2>
                 <div className="space-y-2 text-xs">
+                  <div
+                    onClick={() =>
+                      setUserTextInput(
+                        "!drive Topkapı üniversitesi klasörümdeki 6. hafta dosyalarını getir!"
+                      )
+                    }
+                    className="p-2.5 bg-slate-50 border border-slate-200 rounded-xl hover:border-slate-300 transition cursor-pointer"
+                  >
+                    <div className="font-semibold text-indigo-700 flex items-center gap-1">
+                      <i className="fa-brands fa-google-drive"></i> Google Drive
+                      &amp; Google Photos:
+                    </div>
+                    <code className="text-[10px] text-slate-600 block mt-0.5 bg-white p-1 rounded border border-slate-200">
+                      !drive Topkapı üniversitesi 6. hafta dosyaları
+                    </code>
+                    <code className="text-[10px] text-slate-600 block mt-1 bg-white p-1 rounded border border-slate-200">
+                      5 numarayı paylaş / !drive 5 numaralı dosyayı paylaş
+                    </code>
+                    <code className="text-[10px] text-slate-600 block mt-1 bg-white p-1 rounded border border-slate-200">
+                      !foto 17 Eylül 2026 / !foto 25 Ekim 2026 Esmeray
+                    </code>
+                  </div>
+
                   <div
                     onClick={() =>
                       setUserTextInput(
@@ -1246,52 +1654,7 @@ WHATSAPP_VERIFY_TOKEN=${waverify}`;
                       !toplanti Yarın 14:00 Bütçe Toplantısı
                     </code>
                     <code className="text-[10px] text-slate-600 block mt-1 bg-white p-1 rounded border border-slate-200">
-                      !toplanti gönder Bütçe Toplantısı ali@ornek.com
-                    </code>
-                    <code className="text-[10px] text-slate-600 block mt-1 bg-white p-1 rounded border border-slate-200">
-                      !toplanti güncelle Bütçe Toplantısı Yarın 16:30
-                    </code>
-                    <code className="text-[10px] text-slate-600 block mt-1 bg-white p-1 rounded border border-slate-200">
                       !toplanti sil Bütçe Toplantısı
-                    </code>
-                  </div>
-
-                  <div
-                    onClick={() =>
-                      setUserTextInput(
-                        "!rehber Zeynep Kaya +905331112233 zeynep@firma.com"
-                      )
-                    }
-                    className="p-2.5 bg-slate-50 border border-slate-200 rounded-xl hover:border-slate-300 transition cursor-pointer"
-                  >
-                    <div className="font-semibold text-emerald-700 flex items-center gap-1">
-                      <i className="fa-regular fa-id-badge"></i> Google Kişiler
-                      (Ekle / Güncelle / Sil):
-                    </div>
-                    <code className="text-[10px] text-slate-600 block mt-0.5 bg-white p-1 rounded border border-slate-200">
-                      !rehber Ali Kaya 05321112233 ali@kaya.com
-                    </code>
-                    <code className="text-[10px] text-slate-600 block mt-1 bg-white p-1 rounded border border-slate-200">
-                      !rehber güncelle Ali Kaya 05329998877
-                    </code>
-                    <code className="text-[10px] text-slate-600 block mt-1 bg-white p-1 rounded border border-slate-200">
-                      !rehber sil Ali Kaya
-                    </code>
-                  </div>
-
-                  <div
-                    onClick={() =>
-                      setUserTextInput(
-                        "!not Market: Filtre kahve, çavdar ekmeği ve maden suyu"
-                      )
-                    }
-                    className="p-2.5 bg-slate-50 border border-slate-200 rounded-xl hover:border-slate-300 transition cursor-pointer"
-                  >
-                    <div className="font-semibold text-amber-700 flex items-center gap-1">
-                      <i className="fa-regular fa-file-lines"></i> Not Defteri:
-                    </div>
-                    <code className="text-[11px] text-slate-600 block mt-0.5 bg-white p-1 rounded border border-slate-200">
-                      !not [Not Metniniz]
                     </code>
                   </div>
                 </div>
@@ -1315,10 +1678,6 @@ WHATSAPP_VERIFY_TOKEN=${waverify}`;
                       : "Simülasyon Modu"}
                   </span>
                 </div>
-                <p className="text-[11px] text-slate-300 leading-relaxed">
-                  Kendi kişisel Takvim & Rehberinizle canlı eşleştirmek için
-                  OAuth ile yetkilendirin.
-                </p>
                 <div className="flex gap-2">
                   <button
                     onClick={() => setIsGoogleModalOpen(true)}
@@ -1341,37 +1700,43 @@ WHATSAPP_VERIFY_TOKEN=${waverify}`;
             {/* Right Chat Panel */}
             <div className="flex-1 flex flex-col h-full bg-wa-bg relative overflow-hidden">
               {/* WhatsApp Header */}
-              <div className="bg-wa-teal text-white px-4 py-3 flex items-center justify-between shadow-md shrink-0 z-10">
-                <div className="flex items-center space-x-3">
-                  <div className="relative">
+              <div className="bg-wa-teal text-white px-3 sm:px-4 py-2.5 flex items-center justify-between shadow-md shrink-0 z-10">
+                <div className="flex items-center space-x-2.5 min-w-0">
+                  <div className="relative shrink-0">
                     <div className="w-10 h-10 rounded-full bg-white/20 border border-white/40 flex items-center justify-center text-white font-bold">
                       <i className="fa-solid fa-robot text-lg"></i>
                     </div>
                     <span className="absolute bottom-0 right-0 w-3 h-3 bg-emerald-400 border-2 border-wa-teal rounded-full"></span>
                   </div>
-                  <div>
-                    <h3 className="text-sm font-bold flex items-center gap-1.5">
-                      Google Workspace Asistanı (+90 549 100 77 29)
+                  <div className="min-w-0">
+                    <h3 className="text-xs sm:text-sm font-bold flex items-center gap-1.5 truncate">
+                      <span>OBC Asistan (+90 549 100 77 29)</span>
                       <i
-                        className="fa-solid fa-certificate text-teal-300 text-xs"
+                        className="fa-solid fa-certificate text-teal-300 text-xs shrink-0"
                         title="Onaylı 7/24 Bulut Bot"
                       ></i>
                     </h3>
-                    <p className="text-[11px] text-teal-100 flex items-center gap-1">
-                      <span>7/24 Vercel Bulut Aktif</span> •{" "}
-                      <span>PC Kapalıyken Çalışır (Takvim &amp; Rehber)</span>
+                    <p className="text-[10px] sm:text-[11px] text-teal-100 truncate">
+                      7/24 Canlı Sesli Arama • Peş Peşe Komut • Photos &amp; Drive
                     </p>
                   </div>
                 </div>
 
-                <div className="flex items-center space-x-2 text-teal-100">
+                <div className="flex items-center space-x-1.5 text-teal-100 shrink-0">
                   <button
-                    onClick={downloadCompleteProjectZip}
-                    title="Sunucu Kodlarını İndir"
-                    className="bg-emerald-600 hover:bg-emerald-500 text-white px-2.5 py-1.5 rounded-lg text-xs font-bold transition flex items-center gap-1.5 cursor-pointer"
+                    onClick={startWhatsAppVoiceCall}
+                    title="WhatsApp Canlı Sesli Arama (Peş Peşe Komut Modu)"
+                    className="bg-green-500 hover:bg-green-400 text-slate-950 px-3 py-1.5 rounded-full text-xs font-extrabold transition flex items-center gap-1.5 shadow-md cursor-pointer"
                   >
-                    <i className="fa-solid fa-download"></i>
-                    <span className="hidden sm:inline">ZIP İndir</span>
+                    <i className="fa-solid fa-phone-volume"></i>
+                    <span>Sesli Ara</span>
+                  </button>
+                  <button
+                    onClick={() => setShowMobileQuickPanel((v) => !v)}
+                    title="Hızlı Sesli Komut Örnekleri"
+                    className="md:hidden hover:text-white p-1.5 rounded-lg hover:bg-white/10 transition cursor-pointer"
+                  >
+                    <i className="fa-solid fa-bolt text-sm"></i>
                   </button>
                   <button
                     onClick={clearChatHistory}
@@ -2416,6 +2781,529 @@ WHATSAPP_VERIFY_TOKEN=${waverify}`;
             </div>
           </section>
         )}
+
+        {/* ==================== TAB: GOOGLE PHOTOS & GOOGLE DRIVE ==================== */}
+        {activeTab === "media" && (
+          <section className="flex-1 p-4 md:p-6 overflow-y-auto bg-slate-50 custom-scrollbar">
+            <div className="max-w-6xl mx-auto space-y-6">
+              {/* Quick Search Banner */}
+              <div className="bg-gradient-to-r from-slate-900 via-slate-800 to-emerald-950 text-white p-5 rounded-3xl shadow-lg border border-slate-700 flex flex-wrap items-center justify-between gap-4">
+                <div>
+                  <h2 className="text-base font-extrabold flex items-center gap-2">
+                    <i className="fa-regular fa-images text-pink-400"></i>
+                    <span>Google Photos &amp; Google Drive Canlı Arşivi</span>
+                  </h2>
+                  <p className="text-xs text-slate-300 mt-1">
+                    WhatsApp veya Canlı Sesli Arama üzerinden getirdiğiniz
+                    fotoğraflar ve Drive belgeleri burada listelenir.
+                  </p>
+                </div>
+                <div className="flex flex-wrap gap-2">
+                  <button
+                    onClick={() => {
+                      setActiveTab("chat");
+                      triggerVoiceSample(
+                        "19 Eylül 2026 tarihindeki fotoğraflarımı paylaş"
+                      );
+                    }}
+                    className="px-3.5 py-2 bg-pink-600 hover:bg-pink-500 text-white rounded-xl text-xs font-bold flex items-center gap-1.5 transition cursor-pointer"
+                  >
+                    <i className="fa-solid fa-camera"></i>
+                    <span>📸 Eylül/Ekim Fotoğrafları Getir</span>
+                  </button>
+                  <button
+                    onClick={() => {
+                      setActiveTab("chat");
+                      triggerVoiceSample(
+                        "Topkapı üniversitesi klasörümdeki 6. hafta dosyalarını getir"
+                      );
+                    }}
+                    className="px-3.5 py-2 bg-blue-600 hover:bg-blue-500 text-white rounded-xl text-xs font-bold flex items-center gap-1.5 transition cursor-pointer"
+                  >
+                    <i className="fa-brands fa-google-drive"></i>
+                    <span>📁 6. Hafta Drive Dosyalarını Getir</span>
+                  </button>
+                </div>
+              </div>
+
+              {/* Google Photos Grid */}
+              <div className="bg-white p-5 rounded-3xl border border-slate-200 shadow-xs space-y-4">
+                <div className="flex items-center justify-between">
+                  <h3 className="text-sm font-bold text-slate-900 flex items-center gap-2">
+                    <i className="fa-regular fa-images text-pink-600"></i>
+                    <span>Son Getirilen Google Photos &amp; Galeri Kareleri</span>
+                    <span className="bg-pink-100 text-pink-700 text-xs px-2 py-0.5 rounded-full font-mono">
+                      {photosList.length}
+                    </span>
+                  </h3>
+                </div>
+
+                {photosList.length === 0 ? (
+                  <div className="text-center py-8 text-xs text-slate-400">
+                    Henüz fotoğraf sorgulanmadı. WhatsApp&apos;tan{" "}
+                    <b>!foto 19 Eylül 2026</b> veya{" "}
+                    <b>!foto 25 Ekim 2026 Esmeray</b> yazabilir ya da sesli
+                    arayabilirsiniz.
+                  </div>
+                ) : (
+                  <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+                    {photosList.map((p, idx) => (
+                      <div
+                        key={p.id + "-" + idx}
+                        className="p-3.5 rounded-2xl border border-slate-200 bg-slate-50/70 hover:bg-white hover:shadow-md transition flex flex-col justify-between gap-3"
+                      >
+                        <div>
+                          <div className="flex items-center justify-between gap-2 mb-1.5">
+                            <span className="text-[11px] font-bold px-2 py-0.5 rounded-full bg-pink-100 text-pink-800">
+                              #{idx + 1} • {p.date}
+                            </span>
+                            <span className="text-[10px] text-slate-500 truncate">
+                              {p.albumOrLocation || p.source}
+                            </span>
+                          </div>
+                          <h4 className="text-xs font-bold text-slate-900 break-words">
+                            {p.title}
+                          </h4>
+                        </div>
+                        <div className="flex items-center gap-2 pt-2 border-t border-slate-200/80">
+                          <a
+                            href={p.url}
+                            target="_blank"
+                            rel="noreferrer"
+                            className="flex-1 py-1.5 px-2.5 bg-pink-600 hover:bg-pink-700 text-white rounded-xl text-xs font-semibold text-center transition"
+                          >
+                            🔗 Fotoğrafı Aç
+                          </a>
+                          <button
+                            onClick={() => {
+                              setActiveTab("chat");
+                              processCommandThroughApi({
+                                text: `${idx + 1} numaralı fotoğrafı paylaş`,
+                                isVoice: false,
+                              });
+                            }}
+                            className="py-1.5 px-2.5 bg-slate-200 hover:bg-slate-300 text-slate-800 rounded-xl text-xs font-semibold transition cursor-pointer"
+                          >
+                            Paylaş
+                          </button>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+
+              {/* Google Drive Files List */}
+              <div className="bg-white p-5 rounded-3xl border border-slate-200 shadow-xs space-y-4">
+                <div className="flex items-center justify-between">
+                  <h3 className="text-sm font-bold text-slate-900 flex items-center gap-2">
+                    <i className="fa-brands fa-google-drive text-blue-600"></i>
+                    <span>Son Getirilen Google Drive Dosya Seçenekleri</span>
+                    <span className="bg-blue-100 text-blue-700 text-xs px-2 py-0.5 rounded-full font-mono">
+                      {driveFilesList.length}
+                    </span>
+                  </h3>
+                </div>
+
+                {driveFilesList.length === 0 ? (
+                  <div className="text-center py-8 text-xs text-slate-400">
+                    Henüz Drive dosyası sorgulanmadı. WhatsApp&apos;tan{" "}
+                    <b>
+                      !drive Topkapı üniversitesi klasörümdeki 6. hafta
+                      dosyalarını getir
+                    </b>{" "}
+                    yazabilirsiniz.
+                  </div>
+                ) : (
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-3.5">
+                    {driveFilesList.map((f, idx) => (
+                      <div
+                        key={f.id + "-" + idx}
+                        className="p-4 rounded-2xl border border-slate-200 bg-slate-50/70 hover:bg-white hover:shadow-md transition flex flex-col justify-between gap-3"
+                      >
+                        <div>
+                          <div className="flex items-center justify-between gap-2 mb-1">
+                            <span className="text-[11px] font-bold px-2 py-0.5 rounded-full bg-blue-100 text-blue-800">
+                              Seçenek #{idx + 1} • {f.typeLabel}
+                            </span>
+                            <span className="text-[11px] text-slate-500 font-mono">
+                              {f.modifiedDate}
+                              {f.sizeLabel ? ` • ${f.sizeLabel}` : ""}
+                            </span>
+                          </div>
+                          <h4 className="text-xs sm:text-sm font-bold text-slate-900 break-words mt-1">
+                            {f.name}
+                          </h4>
+                          {f.folderPath && (
+                            <p className="text-[11px] text-emerald-700 font-medium mt-1">
+                              📂 Klasör: {f.folderPath}
+                            </p>
+                          )}
+                          {f.snippet && (
+                            <p className="text-[11px] text-slate-600 italic mt-1 line-clamp-2">
+                              &quot;{f.snippet}&quot;
+                            </p>
+                          )}
+                        </div>
+                        <div className="flex items-center gap-2 pt-2 border-t border-slate-200/80">
+                          <a
+                            href={f.webViewLink}
+                            target="_blank"
+                            rel="noreferrer"
+                            className="flex-1 py-1.5 px-3 bg-blue-600 hover:bg-blue-700 text-white rounded-xl text-xs font-semibold text-center transition"
+                          >
+                            🔗 Drive&apos;da Aç
+                          </a>
+                          <button
+                            onClick={() => {
+                              setActiveTab("chat");
+                              processCommandThroughApi({
+                                text: `${idx + 1} numarayı paylaş`,
+                                isVoice: false,
+                              });
+                            }}
+                            className="py-1.5 px-3 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-semibold transition cursor-pointer"
+                          >
+                            📤 #{idx + 1} Paylaş
+                          </button>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            </div>
+          </section>
+        )}
+
+        {/* ==================== WHATSAPP LIVE VOICE CALL OVERLAY (PEŞ PEŞE KOMUT MODU) ==================== */}
+        {isVoiceCallOpen && (
+          <div className="fixed inset-0 z-50 bg-gradient-to-b from-slate-950 via-emerald-950 to-slate-950 text-white flex flex-col justify-between p-4 sm:p-6 overflow-y-auto">
+            {/* Top Bar */}
+            <div className="max-w-2xl w-full mx-auto flex items-center justify-between">
+              <div className="flex items-center gap-2 text-xs text-emerald-300 bg-emerald-900/40 px-3 py-1.5 rounded-full border border-emerald-500/30">
+                <span className="w-2 h-2 rounded-full bg-emerald-400 animate-ping"></span>
+                <span>WhatsApp Canlı Sesli Arama • Peş Peşe Komut Modu</span>
+              </div>
+              <div className="font-mono text-sm font-bold text-emerald-300 bg-white/10 px-3 py-1 rounded-full">
+                {String(Math.floor(callDurationSec / 60)).padStart(2, "0")}:
+                {String(callDurationSec % 60).padStart(2, "0")}
+              </div>
+            </div>
+
+            {/* Center Avatar, Status & Live Transcript */}
+            <div className="max-w-2xl w-full mx-auto my-4 flex flex-col items-center text-center space-y-4">
+              <div className="relative">
+                <div
+                  className={`w-24 h-24 sm:w-28 sm:h-28 rounded-full bg-gradient-to-tr from-emerald-500 to-teal-400 flex items-center justify-center shadow-2xl border-4 ${
+                    callStatus === "listening"
+                      ? "border-emerald-300 ring-8 ring-emerald-500/30 animate-pulse"
+                      : callStatus === "processing"
+                        ? "border-amber-300 ring-8 ring-amber-500/30 animate-spin"
+                        : "border-teal-200 ring-8 ring-teal-400/20"
+                  }`}
+                >
+                  <i className="fa-brands fa-whatsapp text-4xl sm:text-5xl text-white"></i>
+                </div>
+                <span className="absolute -bottom-1 right-0 bg-emerald-500 text-slate-950 text-[10px] font-extrabold px-2 py-0.5 rounded-full shadow">
+                  CANLI
+                </span>
+              </div>
+
+              <div>
+                <h2 className="text-lg sm:text-xl font-extrabold tracking-tight">
+                  OBC Google Workspace Asistanı
+                </h2>
+                <p className="text-xs text-emerald-300/90 mt-0.5">
+                  +90 549 100 77 29 • Takvim • Rehber • Tasks • Photos • Drive
+                </p>
+              </div>
+
+              {/* Status Badge */}
+              <div className="inline-flex items-center gap-2 px-4 py-2 rounded-2xl bg-white/10 border border-white/15 text-xs sm:text-sm font-bold">
+                {callStatus === "listening" && (
+                  <>
+                    <span className="w-2.5 h-2.5 rounded-full bg-red-500 animate-ping"></span>
+                    <span className="text-emerald-200">
+                      🎙️ Sizi Dinliyorum... Komutlarınızı Peş Peşe
+                      Söyleyebilirsiniz
+                    </span>
+                  </>
+                )}
+                {callStatus === "processing" && (
+                  <>
+                    <i className="fa-solid fa-spinner animate-spin text-amber-300"></i>
+                    <span className="text-amber-200">
+                      ⚡ Komut Çözümleniyor &amp; Google Servislerinde
+                      Çalıştırılıyor...
+                    </span>
+                  </>
+                )}
+                {callStatus === "speaking" && (
+                  <>
+                    <i className="fa-solid fa-volume-high text-teal-300 animate-bounce"></i>
+                    <span className="text-teal-200">
+                      🔊 Asistan Yanıtlıyor (Bitince Otomatik Dinlemeye
+                      Geçer)...
+                    </span>
+                  </>
+                )}
+                {callStatus === "paused" && (
+                  <span className="text-slate-300">
+                    ⏸️ Mikrofon Duraklatıldı
+                  </span>
+                )}
+              </div>
+
+              {/* Live Spoken Transcript Box */}
+              <div className="w-full bg-black/40 border border-emerald-500/30 rounded-2xl p-4 min-h-[76px] flex flex-col justify-center">
+                <span className="text-[10px] uppercase tracking-wider text-emerald-400 font-bold mb-1">
+                  Canlı Ses Çözümleme (Türkçe STT &amp; Çoklu Komut):
+                </span>
+                <p className="text-sm sm:text-base font-medium text-white">
+                  {callLiveTranscript ? (
+                    `"${callLiveTranscript}"`
+                  ) : (
+                    <span className="text-slate-400 italic text-xs sm:text-sm">
+                      Örn: &quot;Topkapı üniversitesi klasörümdeki 6. hafta
+                      dosyalarını getir, ardından 19 Eylül 2026 fotoğraflarımı
+                      paylaş&quot;
+                    </span>
+                  )}
+                </p>
+                {callLiveTranscript && (
+                  <div className="mt-3 flex justify-center">
+                    <button
+                      onClick={() => executeCallCommand(callLiveTranscript)}
+                      className="px-4 py-1.5 bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-extrabold text-xs rounded-full shadow cursor-pointer"
+                    >
+                      ⚡ Hemen Çalıştır &amp; Sıradaki Komuta Geç
+                    </button>
+                  </div>
+                )}
+              </div>
+
+              {/* Quick Voice Chain Buttons inside Call */}
+              <div className="w-full flex flex-wrap justify-center gap-2">
+                <button
+                  onClick={() =>
+                    executeCallCommand(
+                      "Topkapı üniversitesi klasörümdeki 6. hafta dosyalarını getir"
+                    )
+                  }
+                  className="px-3 py-1.5 bg-white/10 hover:bg-white/20 rounded-xl text-[11px] font-semibold border border-white/15 cursor-pointer"
+                >
+                  📁 &quot;Topkapı Üni. 6. hafta dosyaları&quot;
+                </button>
+                <button
+                  onClick={() => executeCallCommand("5 numarayı paylaş")}
+                  className="px-3 py-1.5 bg-white/10 hover:bg-white/20 rounded-xl text-[11px] font-semibold border border-white/15 cursor-pointer"
+                >
+                  📤 &quot;5 numarayı paylaş&quot;
+                </button>
+                <button
+                  onClick={() =>
+                    executeCallCommand(
+                      "19 Eylül 2026 tarihindeki fotoğraflarımı paylaş"
+                    )
+                  }
+                  className="px-3 py-1.5 bg-white/10 hover:bg-white/20 rounded-xl text-[11px] font-semibold border border-white/15 cursor-pointer"
+                >
+                  📸 &quot;19 Eylül 2026 fotoğrafları&quot;
+                </button>
+                <button
+                  onClick={() =>
+                    executeCallCommand(
+                      "Yarın 10:00 bütçe toplantısı ekle, ardından Topkapı üniversitesi 6. hafta dosyalarını getir"
+                    )
+                  }
+                  className="px-3 py-1.5 bg-purple-500/30 hover:bg-purple-500/50 text-purple-100 rounded-xl text-[11px] font-bold border border-purple-400/40 cursor-pointer"
+                >
+                  ⚡ &quot;Peş Peşe 2 Komut Çalıştır&quot;
+                </button>
+              </div>
+
+              {/* Manual / Chained Command Input inside Call */}
+              <form
+                onSubmit={(e) => {
+                  e.preventDefault();
+                  if (!callManualInput.trim()) return;
+                  const txt = callManualInput.trim();
+                  setCallManualInput("");
+                  executeCallCommand(txt);
+                }}
+                className="w-full flex gap-2"
+              >
+                <input
+                  type="text"
+                  value={callManualInput}
+                  onChange={(e) => setCallManualInput(e.target.value)}
+                  placeholder="Arama sırasında yazılı/zincirleme komut da gönderebilirsiniz..."
+                  className="flex-1 bg-white/10 border border-white/20 rounded-xl px-3.5 py-2 text-xs text-white placeholder-slate-400 focus:outline-none focus:border-emerald-400"
+                />
+                <button
+                  type="submit"
+                  className="px-4 py-2 bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-bold text-xs rounded-xl cursor-pointer"
+                >
+                  Gönder
+                </button>
+              </form>
+
+              {/* Executed Commands Feed in This Call */}
+              {callHistory.length > 0 && (
+                <div className="w-full bg-slate-900/80 border border-slate-700 rounded-2xl p-3 max-h-48 overflow-y-auto text-left space-y-2 custom-scrollbar">
+                  <div className="text-[11px] font-bold text-emerald-400 uppercase tracking-wider">
+                    ⚡ Bu Aramada Peş Peşe Çalıştırılan Komutlar (
+                    {callHistory.length}):
+                  </div>
+                  {callHistory.map((item, i) => (
+                    <div
+                      key={item.id}
+                      className="p-2.5 rounded-xl bg-white/5 border border-white/10 text-xs space-y-1"
+                    >
+                      <div className="flex items-center justify-between">
+                        <span className="font-bold text-emerald-300">
+                          #{callHistory.length - i} • &quot;{item.command}&quot;
+                        </span>
+                        <span className="text-[10px] text-slate-400 font-mono">
+                          {item.time}
+                        </span>
+                      </div>
+                      <p className="text-[11px] text-slate-200 line-clamp-2">
+                        {item.replySummary}
+                      </p>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+
+            {/* Bottom Call Controls */}
+            <div className="max-w-xl w-full mx-auto flex items-center justify-center gap-3 sm:gap-5 pt-2">
+              <button
+                onClick={() => {
+                  if (callStatus === "listening") {
+                    stopCallRecognitionOnly();
+                    setCallStatus("paused");
+                  } else {
+                    startCallListeningCycle();
+                  }
+                }}
+                className={`px-4 py-3 rounded-2xl text-xs font-bold flex items-center gap-2 transition cursor-pointer ${
+                  callStatus === "listening"
+                    ? "bg-white/15 hover:bg-white/25 text-white"
+                    : "bg-amber-500 text-slate-950"
+                }`}
+              >
+                <i
+                  className={`fa-solid ${
+                    callStatus === "listening"
+                      ? "fa-microphone"
+                      : "fa-microphone-slash"
+                  }`}
+                ></i>
+                <span>
+                  {callStatus === "listening"
+                    ? "Mikrofon Açık"
+                    : "Dinlemeyi Başlat"}
+                </span>
+              </button>
+
+              <button
+                onClick={() => setCallHandsFree((v) => !v)}
+                className={`px-4 py-3 rounded-2xl text-xs font-bold flex items-center gap-2 transition cursor-pointer ${
+                  callHandsFree
+                    ? "bg-emerald-600/40 border border-emerald-400/50 text-emerald-200"
+                    : "bg-white/10 text-slate-300"
+                }`}
+              >
+                <i className="fa-solid fa-rotate"></i>
+                <span>
+                  Peş Peşe Oto-Gönder: {callHandsFree ? "AÇIK" : "KAPALI"}
+                </span>
+              </button>
+
+              <button
+                onClick={() => setCallTtsEnabled((v) => !v)}
+                className={`px-4 py-3 rounded-2xl text-xs font-bold flex items-center gap-2 transition cursor-pointer ${
+                  callTtsEnabled
+                    ? "bg-teal-600/40 border border-teal-400/50 text-teal-200"
+                    : "bg-white/10 text-slate-300"
+                }`}
+              >
+                <i
+                  className={`fa-solid ${
+                    callTtsEnabled ? "fa-volume-high" : "fa-volume-xmark"
+                  }`}
+                ></i>
+                <span>Sesli Yanıt: {callTtsEnabled ? "AÇIK" : "KAPALI"}</span>
+              </button>
+
+              <button
+                onClick={endWhatsAppVoiceCall}
+                className="px-6 py-3 rounded-2xl bg-red-600 hover:bg-red-500 text-white text-xs sm:text-sm font-extrabold flex items-center gap-2 shadow-xl shadow-red-950/60 transition cursor-pointer"
+              >
+                <i className="fa-solid fa-phone-slash"></i>
+                <span>Aramayı Bitir</span>
+              </button>
+            </div>
+          </div>
+        )}
+
+        {/* ==================== MOBILE BOTTOM NAVIGATION BAR (PWA) ==================== */}
+        <nav className="md:hidden fixed bottom-0 left-0 right-0 z-40 bg-slate-900 text-white border-t border-slate-800 px-2 py-1.5 flex items-center justify-around text-[10px]">
+          <button
+            onClick={() => setActiveTab("chat")}
+            className={`flex flex-col items-center gap-0.5 px-2 py-1 rounded-lg ${
+              activeTab === "chat" ? "text-emerald-400 font-bold" : "text-slate-400"
+            }`}
+          >
+            <i className="fa-brands fa-whatsapp text-base"></i>
+            <span>Sohbet</span>
+          </button>
+
+          <button
+            onClick={startWhatsAppVoiceCall}
+            className="flex flex-col items-center gap-0.5 px-3 py-1 rounded-xl bg-gradient-to-r from-green-500 to-emerald-500 text-slate-950 font-extrabold shadow-md -mt-3 border-2 border-slate-900"
+          >
+            <i className="fa-solid fa-phone-volume text-base"></i>
+            <span>Sesli Ara</span>
+          </button>
+
+          <button
+            onClick={() => setActiveTab("media")}
+            className={`flex flex-col items-center gap-0.5 px-2 py-1 rounded-lg ${
+              activeTab === "media" ? "text-pink-400 font-bold" : "text-slate-400"
+            }`}
+          >
+            <i className="fa-regular fa-images text-base"></i>
+            <span>Photos/Drive</span>
+          </button>
+
+          <button
+            onClick={() => setActiveTab("calendar")}
+            className={`flex flex-col items-center gap-0.5 px-2 py-1 rounded-lg ${
+              activeTab === "calendar"
+                ? "text-blue-400 font-bold"
+                : "text-slate-400"
+            }`}
+          >
+            <i className="fa-regular fa-calendar-check text-base"></i>
+            <span>Takvim</span>
+          </button>
+
+          <button
+            onClick={() => setActiveTab("notes")}
+            className={`flex flex-col items-center gap-0.5 px-2 py-1 rounded-lg ${
+              activeTab === "notes"
+                ? "text-amber-400 font-bold"
+                : "text-slate-400"
+            }`}
+          >
+            <i className="fa-regular fa-note-sticky text-base"></i>
+            <span>Görevler</span>
+          </button>
+        </nav>
 
         {/* ==================== GOOGLE LIVE AUTH MODAL ==================== */}
         {isGoogleModalOpen && (

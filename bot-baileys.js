@@ -460,6 +460,9 @@ async function startWhatsAppBot() {
         trimmedText.startsWith("📋 *Google Tasks") ||
         trimmedText.startsWith("📸 *Google Photos") ||
         trimmedText.startsWith("📁 *Google Drive") ||
+        trimmedText.startsWith("✅ *Seçilen") ||
+        trimmedText.startsWith("⚡ *Peş Peşe") ||
+        trimmedText.startsWith("📞 *Canlı Sesli Arama") ||
         trimmedText.startsWith("📝 Mesajınız işlendi") ||
         trimmedText.startsWith("Anlayamadım. Lütfen") ||
         trimmedText.includes("📌 *Başlık:*") ||
@@ -533,7 +536,10 @@ async function startWhatsAppBot() {
         lower.includes("excel") ||
         lower.includes("seçenek") ||
         lower.includes("secenek") ||
-        lower.includes("numaralı");
+        lower.includes("numara") ||
+        lower.includes("numaralı") ||
+        lower.includes("ardından") ||
+        lower.includes("daha sonra");
 
       if (!isCommand) continue;
 
@@ -709,19 +715,40 @@ async function startWhatsAppBot() {
         if (Array.isArray(result.photos) && result.photos.length > 0) {
           const accessToken = await getGoogleAccessToken();
           for (const photo of result.photos.slice(0, 3)) {
-            const imgUrl = photo.thumbnailUrl || photo.downloadUrl;
-            if (!imgUrl) continue;
-            try {
-              const imgRes = await axios.get(imgUrl, {
-                responseType: "arraybuffer",
-                timeout: 8000,
-                headers: accessToken
-                  ? { Authorization: `Bearer ${accessToken}` }
-                  : {},
-              });
-              if (imgRes.data && imgRes.data.byteLength > 200) {
+            let imgBuffer = null;
+            // 1. Try authenticated Drive API v3 media download URL first
+            if (photo.downloadUrl && accessToken) {
+              try {
+                const imgRes = await axios.get(photo.downloadUrl, {
+                  responseType: "arraybuffer",
+                  timeout: 12000,
+                  headers: { Authorization: `Bearer ${accessToken}` },
+                });
+                if (imgRes.data && imgRes.data.byteLength > 200) {
+                  imgBuffer = Buffer.from(imgRes.data);
+                }
+              } catch {
+                // Fallback to thumbnailUrl
+              }
+            }
+            // 2. Fallback to thumbnailUrl (without Bearer header first, then with Bearer)
+            if (!imgBuffer && photo.thumbnailUrl) {
+              try {
+                const thumbRes = await axios.get(photo.thumbnailUrl, {
+                  responseType: "arraybuffer",
+                  timeout: 8000,
+                });
+                if (thumbRes.data && thumbRes.data.byteLength > 200) {
+                  imgBuffer = Buffer.from(thumbRes.data);
+                }
+              } catch {
+                // Skip if unavailable
+              }
+            }
+            if (imgBuffer) {
+              try {
                 const imgSent = await sock.sendMessage(jid, {
-                  image: Buffer.from(imgRes.data),
+                  image: imgBuffer,
                   caption: `📸 *${photo.title}* (${photo.date})${BOT_INVISIBLE_MARKER}`,
                 });
                 lastBotReplyTimePerJid.set(jid, Date.now());
@@ -729,9 +756,61 @@ async function startWhatsAppBot() {
                   sentBotMessageIds.add(imgSent.key.id);
                   processedMessageIds.add(imgSent.key.id);
                 }
+              } catch (sendImgErr) {
+                console.error("Fotoğraf gönderme hatası:", sendImgErr.message);
               }
-            } catch {
-              // Skip if individual thumbnail requires browser session
+            }
+          }
+        }
+
+        // If a specific Google Drive file was selected ("5 numarayı paylaş" / "!drive 5 numaralı dosyayı paylaş") or single match returned, send the actual file as a WhatsApp document attachment!
+        if (result.selectedDriveFile && result.selectedDriveFile.id) {
+          const accessToken = await getGoogleAccessToken();
+          const f = result.selectedDriveFile;
+          if (accessToken) {
+            try {
+              const isGoogleWorkspaceDoc = String(f.mimeType || "").startsWith(
+                "application/vnd.google-apps."
+              );
+              const downloadEndpoint = isGoogleWorkspaceDoc
+                ? `https://www.googleapis.com/drive/v3/files/${f.id}/export?mimeType=application/pdf`
+                : `https://www.googleapis.com/drive/v3/files/${f.id}?alt=media`;
+              const docMime = isGoogleWorkspaceDoc
+                ? "application/pdf"
+                : f.mimeType || "application/octet-stream";
+              const docFileName =
+                isGoogleWorkspaceDoc && !f.name.toLowerCase().endsWith(".pdf")
+                  ? `${f.name}.pdf`
+                  : f.name;
+
+              const docRes = await axios.get(downloadEndpoint, {
+                responseType: "arraybuffer",
+                timeout: 20000,
+                headers: { Authorization: `Bearer ${accessToken}` },
+              });
+
+              if (
+                docRes.data &&
+                docRes.data.byteLength > 0 &&
+                docRes.data.byteLength <= 45 * 1024 * 1024
+              ) {
+                const docSent = await sock.sendMessage(jid, {
+                  document: Buffer.from(docRes.data),
+                  fileName: docFileName,
+                  mimetype: docMime,
+                  caption: `📄 *${f.name}* (${f.typeLabel || "Belge"})${BOT_INVISIBLE_MARKER}`,
+                });
+                lastBotReplyTimePerJid.set(jid, Date.now());
+                if (docSent?.key?.id) {
+                  sentBotMessageIds.add(docSent.key.id);
+                  processedMessageIds.add(docSent.key.id);
+                }
+              }
+            } catch (docErr) {
+              console.error(
+                "Drive dosyası WhatsApp'a ek olarak gönderilemedi (link paylaşıldı):",
+                docErr.message
+              );
             }
           }
         }
@@ -741,6 +820,37 @@ async function startWhatsAppBot() {
         console.error("Asistan hatası:", err.message);
       } finally {
         inFlightJids.delete(jid);
+      }
+    }
+  });
+
+  // Listen to incoming WhatsApp Voice/Video Calls & immediately send 1-tap Live Voice Call & Chained Command link
+  const recentCallNotified = new Map();
+  sock.ev.on("call", async (calls) => {
+    for (const call of calls) {
+      if (call.status !== "offer") continue;
+      const callerJid = call.from || call.chatId;
+      if (!callerJid) continue;
+      const now = Date.now();
+      if (now - (recentCallNotified.get(callerJid) || 0) < 30000) continue;
+      recentCallNotified.set(callerJid, now);
+
+      try {
+        const callMsg =
+          `📞 *Canlı Sesli Arama & Peş Peşe Komut Modu Hazır!*\n\n` +
+          `🎙️ Asistanınızla kesintisiz sesli görüşmek ve tüm Google servislerini (Takvim, Rehber, Görevler, Photos, Drive) *peş peşe sesli komutlarla* çalıştırmak için tek tıkla Canlı Arama Ekranını açın:\n` +
+          `👉 https://obc-asistan.vercel.app/?call=1\n\n` +
+          `💡 _Alternatif olarak doğrudan bu sohbete tek bir ses kaydı içinde "ardından / daha sonra" diyerek peş peşe komut gönderebilirsiniz!_${BOT_INVISIBLE_MARKER}`;
+        const sentCallMsg = await sock.sendMessage(callerJid, {
+          text: callMsg,
+        });
+        lastBotReplyTimePerJid.set(callerJid, Date.now());
+        if (sentCallMsg?.key?.id) {
+          sentBotMessageIds.add(sentCallMsg.key.id);
+          processedMessageIds.add(sentCallMsg.key.id);
+        }
+      } catch (err) {
+        console.error("Çağrı yanıt hatası:", err.message);
       }
     }
   });
