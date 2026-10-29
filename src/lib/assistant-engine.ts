@@ -143,7 +143,10 @@ export function isBotReplyEcho(rawText?: string): boolean {
     t.includes("Sesli Mesaj Çözümlendi") ||
     t.includes("📌 *Başlık:*") ||
     t.includes("🗓️ *Tarih:*") ||
-    t.includes("Mehmet Bey ile bütçe toplantısı")
+    t.includes("Mehmet Bey ile bütçe toplantısı") ||
+    t.toLocaleLowerCase("tr-TR").includes("ben özel sesli asistanınız") ||
+    t.toLocaleLowerCase("tr-TR").includes("sıradaki komutunuzu dinliyorum") ||
+    t.toLocaleLowerCase("tr-TR").includes("whatsapp aramanızı aldım")
   );
 }
 
@@ -160,6 +163,225 @@ export const recentWebhookEvents: {
   photos: [],
   driveFiles: [],
 };
+
+export interface ActiveWhatsAppCallState {
+  callId: string;
+  callerJid: string;
+  timestamp: number;
+  answeredByWeb: boolean;
+}
+
+export let activeWhatsAppCall: ActiveWhatsAppCallState | null = null;
+
+export function triggerIncomingWhatsAppCall(callId: string, callerJid: string) {
+  activeWhatsAppCall = {
+    callId: callId || "call-" + Date.now(),
+    callerJid: callerJid || "+905491007729",
+    timestamp: Date.now(),
+    answeredByWeb: false,
+  };
+  return activeWhatsAppCall;
+}
+
+export function acknowledgeWhatsAppCall(callId?: string) {
+  if (activeWhatsAppCall && (!callId || activeWhatsAppCall.callId === callId)) {
+    activeWhatsAppCall.answeredByWeb = true;
+  }
+}
+
+let cachedLiveWorkspaceSnapshot: {
+  fetchedAt: number;
+  calendars: CalendarItem[];
+  contacts: ContactItem[];
+  notes: NoteItem[];
+  photos: PhotoItem[];
+  driveFiles: DriveFileItem[];
+} | null = null;
+
+export async function fetchLiveWorkspaceSnapshot(force = false) {
+  const now = Date.now();
+  if (
+    !force &&
+    cachedLiveWorkspaceSnapshot &&
+    now - cachedLiveWorkspaceSnapshot.fetchedAt < 25000
+  ) {
+    return cachedLiveWorkspaceSnapshot;
+  }
+
+  const accessToken = await resolveGoogleAccessToken({});
+  if (!accessToken) {
+    return (
+      cachedLiveWorkspaceSnapshot || {
+        fetchedAt: now,
+        calendars: recentWebhookEvents.calendars,
+        contacts: recentWebhookEvents.contacts,
+        notes: recentWebhookEvents.notes,
+        photos: recentWebhookEvents.photos,
+        driveFiles: recentWebhookEvents.driveFiles,
+      }
+    );
+  }
+
+  const headers = { Authorization: `Bearer ${accessToken}` };
+  const twoDaysAgoIso = new Date(now - 2 * 24 * 3600 * 1000).toISOString();
+
+  const [calRes, cntRes, taskRes, photoRes, driveRes] = await Promise.all([
+    fetch(
+      `https://www.googleapis.com/calendar/v3/calendars/primary/events?timeMin=${encodeURIComponent(
+        twoDaysAgoIso
+      )}&maxResults=15&singleEvents=true&orderBy=startTime`,
+      { headers, cache: "no-store" }
+    )
+      .then((r) => (r.ok ? r.json() : null))
+      .catch(() => null),
+    fetch(
+      `https://people.googleapis.com/v1/people/me/connections?personFields=names,phoneNumbers,emailAddresses,organizations&pageSize=30`,
+      { headers, cache: "no-store" }
+    )
+      .then((r) => (r.ok ? r.json() : null))
+      .catch(() => null),
+    fetch(
+      `https://tasks.googleapis.com/tasks/v1/lists/@default/tasks?maxResults=20&showCompleted=true&showHidden=true`,
+      { headers, cache: "no-store" }
+    )
+      .then((r) => (r.ok ? r.json() : null))
+      .catch(() => null),
+    fetch(
+      `https://www.googleapis.com/drive/v3/files?q=${encodeURIComponent(
+        "trashed = false and mimeType contains 'image/'"
+      )}&pageSize=12&orderBy=createdTime desc&fields=files(id,name,mimeType,createdTime,modifiedTime,webViewLink,thumbnailLink)`,
+      { headers, cache: "no-store" }
+    )
+      .then((r) => (r.ok ? r.json() : null))
+      .catch(() => null),
+    fetch(
+      `https://www.googleapis.com/drive/v3/files?q=${encodeURIComponent(
+        "trashed = false and mimeType != 'application/vnd.google-apps.folder' and not mimeType contains 'image/'"
+      )}&pageSize=12&orderBy=modifiedTime desc&fields=files(id,name,mimeType,size,modifiedTime,webViewLink,webContentLink)`,
+      { headers, cache: "no-store" }
+    )
+      .then((r) => (r.ok ? r.json() : null))
+      .catch(() => null),
+  ]);
+
+  const calendars: CalendarItem[] = Array.isArray(calRes?.items)
+    ? calRes.items.map(
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        (ev: any) => {
+          const dtStart = String(ev.start?.dateTime || ev.start?.date || "");
+          const dtEnd = String(ev.end?.dateTime || ev.end?.date || "");
+          return {
+            id: ev.id || "evt-" + Math.random(),
+            title: ev.summary || "Takvim Etkinliği",
+            date: dtStart.slice(0, 10) || formatIsoDate(getIstanbulNow()),
+            startTime: dtStart.includes("T") ? dtStart.slice(11, 16) : "09:00",
+            endTime: dtEnd.includes("T") ? dtEnd.slice(11, 16) : "10:00",
+            attendee:
+              ev.attendees?.[0]?.email ||
+              ev.organizer?.email ||
+              "Google Takvim",
+            location: ev.location || "Google Takvim",
+            source: "☁️ Canlı Google Takvim",
+            createdTime: "Senkronize",
+            htmlLink: ev.htmlLink,
+            syncedWithGoogle: true,
+          };
+        }
+      )
+    : [];
+
+  const contacts: ContactItem[] = Array.isArray(cntRes?.connections)
+    ? cntRes.connections
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        .filter((c: any) => c.names?.[0]?.displayName)
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        .map((c: any) => ({
+          id: c.resourceName || "cnt-" + Math.random(),
+          name: c.names?.[0]?.displayName || "Kişi",
+          phone: c.phoneNumbers?.[0]?.value || "",
+          email: c.emailAddresses?.[0]?.value || "",
+          company: c.organizations?.[0]?.name || "Google Rehber",
+          notes: "Canlı Google Kişiler",
+          addedDate: "Senkronize",
+          syncedWithGoogle: true,
+        }))
+    : [];
+
+  const notes: NoteItem[] = Array.isArray(taskRes?.items)
+    ? taskRes.items
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        .filter((t: any) => t.title)
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        .map((t: any) => ({
+          id: t.id || "tsk-" + Math.random(),
+          title: String(t.title).slice(0, 50),
+          content: t.notes ? `${t.title} — ${t.notes}` : String(t.title),
+          category: "☁️ Canlı Google Tasks",
+          time: String(t.updated || "").slice(0, 10) || "Aktif Görev",
+        }))
+    : [];
+
+  const photos: PhotoItem[] = Array.isArray(photoRes?.files)
+    ? photoRes.files.map(
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        (f: any) => ({
+          id: f.id,
+          title: f.name,
+          date: String(f.createdTime || f.modifiedTime || "").slice(0, 10),
+          url: f.webViewLink || `https://drive.google.com/file/d/${f.id}/view`,
+          thumbnailUrl: f.thumbnailLink,
+          downloadUrl: `https://www.googleapis.com/drive/v3/files/${f.id}?alt=media`,
+          mimeType: f.mimeType || "image/jpeg",
+          source: "Google Drive",
+          albumOrLocation: "Canlı Galeri & Drive",
+        })
+      )
+    : [];
+
+  const driveFiles: DriveFileItem[] = Array.isArray(driveRes?.files)
+    ? driveRes.files.map(
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        (f: any) => {
+          const sizeBytes = Number(f.size || 0);
+          const sizeLabel =
+            sizeBytes > 1024 * 1024
+              ? `${(sizeBytes / (1024 * 1024)).toFixed(1)} MB`
+              : sizeBytes > 1024
+                ? `${Math.round(sizeBytes / 1024)} KB`
+                : undefined;
+          return {
+            id: f.id,
+            name: f.name,
+            mimeType: f.mimeType || "application/octet-stream",
+            typeLabel: getDriveFileTypeLabel(String(f.mimeType || "")),
+            modifiedDate: String(f.modifiedTime || "").slice(0, 10),
+            webViewLink:
+              f.webViewLink || `https://drive.google.com/file/d/${f.id}/view`,
+            webContentLink: f.webContentLink,
+            sizeLabel,
+          };
+        }
+      )
+    : [];
+
+  cachedLiveWorkspaceSnapshot = {
+    fetchedAt: now,
+    calendars: [...recentWebhookEvents.calendars, ...calendars].slice(0, 25),
+    contacts: [...recentWebhookEvents.contacts, ...contacts].slice(0, 35),
+    notes: [...recentWebhookEvents.notes, ...notes].slice(0, 25),
+    photos: [...recentWebhookEvents.photos, ...photos].slice(0, 20),
+    driveFiles: [...recentWebhookEvents.driveFiles, ...driveFiles].slice(0, 20),
+  };
+
+  if (photos.length > 0 && cachedPhotoSearchResults.length === 0) {
+    cachedPhotoSearchResults = cachedLiveWorkspaceSnapshot.photos;
+  }
+  if (driveFiles.length > 0 && cachedDriveSearchResults.length === 0) {
+    cachedDriveSearchResults = cachedLiveWorkspaceSnapshot.driveFiles;
+  }
+
+  return cachedLiveWorkspaceSnapshot;
+}
 
 export function normalizeSpokenTurkishNumbersAndDates(input: string): string {
   if (!input) return "";

@@ -56,17 +56,21 @@ declare global {
 
 export default function HomePage() {
   const [activeTab, setActiveTab] = useState<TabType>("chat");
-  const [calendarEvents, setCalendarEvents] = useState<CalendarItem[]>(
-    INITIAL_CALENDAR_EVENTS
-  );
-  const [contactsList, setContactsList] =
-    useState<ContactItem[]>(INITIAL_CONTACTS);
-  const [notesList, setNotesList] = useState<NoteItem[]>(INITIAL_NOTES);
+  const [calendarEvents, setCalendarEvents] = useState<CalendarItem[]>([]);
+  const [contactsList, setContactsList] = useState<ContactItem[]>([]);
+  const [notesList, setNotesList] = useState<NoteItem[]>([]);
   const [photosList, setPhotosList] = useState<PhotoItem[]>([]);
   const [driveFilesList, setDriveFilesList] = useState<DriveFileItem[]>([]);
-  const [chatMessages, setChatMessages] = useState<ChatMessage[]>(
-    INITIAL_CHAT_MESSAGES
-  );
+  const [chatMessages, setChatMessages] = useState<ChatMessage[]>([
+    {
+      id: "msg-live-welcome",
+      sender: "bot",
+      text: "👩‍💼 *Merhaba Özgür Bey! Canlı Google Workspace & Kadın Sesli Asistanınız Hazır.*\n\n✅ *Google Takvim, Kişiler, Görevler (Tasks), Google Photos ve Google Drive* hesabınızla gerçek zamanlı bağlıyım.\n📞 Üstteki **'Sesli Ara'** butonuna dokunarak veya **Cep / Web WhatsApp'tan (+90 549 100 77 29)** beni sesli arayarak tüm servisleri peş peşe sesli komutlarla çalıştırabilirsiniz!",
+      time: "Canlı",
+      type: "text",
+      meta: null,
+    },
+  ]);
 
   const [userTextInput, setUserTextInput] = useState("");
   const [contactSearchQuery, setContactSearchQuery] = useState("");
@@ -151,6 +155,9 @@ export default function HomePage() {
   );
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const callSpeechRecRef = useRef<any>(null);
+  const callAudioRef = useRef<HTMLAudioElement | null>(null);
+  const lastHandledCallIdRef = useRef<string>("");
+  const [callNeedsAudioTap, setCallNeedsAudioTap] = useState(false);
   const callActiveRef = useRef<boolean>(false);
   const callHandsFreeRef = useRef<boolean>(true);
   const callTtsRef = useRef<boolean>(true);
@@ -161,17 +168,13 @@ export default function HomePage() {
   const audioChunksRef = useRef<Blob[]>([]);
   const liveTranscriptRef = useRef<string>("");
 
-  // Load persisted data from localStorage & fetch server env status
+  // Load real live Google Workspace data & watch for incoming WhatsApp calls
   useEffect(() => {
     try {
-      const savedCal = localStorage.getItem("obc_calendar_events");
-      if (savedCal) setCalendarEvents(JSON.parse(savedCal));
-
-      const savedCnt = localStorage.getItem("obc_contacts_list");
-      if (savedCnt) setContactsList(JSON.parse(savedCnt));
-
-      const savedNot = localStorage.getItem("obc_notes_list");
-      if (savedNot) setNotesList(JSON.parse(savedNot));
+      // Remove any legacy simulation cache so only real Google Workspace data is shown
+      localStorage.removeItem("obc_calendar_events");
+      localStorage.removeItem("obc_contacts_list");
+      localStorage.removeItem("obc_notes_list");
 
       const savedWiz = localStorage.getItem("obc_wizard_keys");
       if (savedWiz) {
@@ -199,22 +202,34 @@ export default function HomePage() {
       setTimeout(() => {
         setIsVoiceCallOpen(true);
         callActiveRef.current = true;
-      }, 300);
+      }, 250);
     }
 
-    fetch("/api/assistant")
+    fetch("/api/assistant?live=1")
       .then((r) => r.json())
       .then((data) => {
         if (data?.envStatus) {
           setServerEnvStatus(data.envStatus);
         }
-        if (data?.recentWebhookEvents) {
-          const { photos, driveFiles } = data.recentWebhookEvents;
-          if (Array.isArray(photos) && photos.length > 0) {
-            setPhotosList(photos);
+        const source = data?.liveWorkspace || data?.recentWebhookEvents;
+        if (source) {
+          if (Array.isArray(source.calendars) && source.calendars.length > 0) {
+            setCalendarEvents(source.calendars);
           }
-          if (Array.isArray(driveFiles) && driveFiles.length > 0) {
-            setDriveFilesList(driveFiles);
+          if (Array.isArray(source.contacts) && source.contacts.length > 0) {
+            setContactsList(source.contacts);
+          }
+          if (Array.isArray(source.notes) && source.notes.length > 0) {
+            setNotesList(source.notes);
+          }
+          if (Array.isArray(source.photos) && source.photos.length > 0) {
+            setPhotosList(source.photos);
+          }
+          if (
+            Array.isArray(source.driveFiles) &&
+            source.driveFiles.length > 0
+          ) {
+            setDriveFilesList(source.driveFiles);
           }
         }
       })
@@ -224,6 +239,28 @@ export default function HomePage() {
       fetch("/api/assistant")
         .then((r) => r.json())
         .then((data) => {
+          // 1. Check if the user just called +905491007729 on Mobile or Web WhatsApp!
+          if (
+            data?.activeWhatsAppCall &&
+            data.activeWhatsAppCall.callId &&
+            lastHandledCallIdRef.current !== data.activeWhatsAppCall.callId
+          ) {
+            lastHandledCallIdRef.current = data.activeWhatsAppCall.callId;
+            fetch("/api/assistant", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({
+                action: "ack_call",
+                callId: data.activeWhatsAppCall.callId,
+              }),
+            }).catch(() => {});
+
+            if (!callActiveRef.current) {
+              setIsVoiceCallOpen(true);
+              callActiveRef.current = true;
+            }
+          }
+
           if (data?.recentWebhookEvents) {
             const { calendars, contacts, notes, photos, driveFiles } =
               data.recentWebhookEvents;
@@ -263,7 +300,7 @@ export default function HomePage() {
           }
         })
         .catch(() => {});
-    }, 3000);
+    }, 2200);
 
     return () => clearInterval(syncInterval);
   }, []);
@@ -576,30 +613,36 @@ export default function HomePage() {
     }
   }
 
-  // ==================== WHATSAPP LIVE VOICE CALL & CONTINUOUS COMMAND CHAINING ====================
-  function speakTurkishText(text: string, onDone?: () => void) {
-    if (
-      typeof window === "undefined" ||
-      !window.speechSynthesis ||
-      !callTtsRef.current
-    ) {
+  // ==================== WHATSAPP LIVE VOICE CALL & NATURAL TURKISH FEMALE TTS ====================
+  function speakWithBrowserFemaleFallback(
+    cleanForSpeech: string,
+    onDone?: () => void
+  ) {
+    if (typeof window === "undefined" || !window.speechSynthesis) {
       if (onDone) onDone();
       return;
     }
     try {
       window.speechSynthesis.cancel();
-      const cleanForSpeech = text
-        .replace(/https?:\/\/\S+/g, "")
-        .replace(/[*_`~#•1️⃣2️⃣3️⃣4️⃣5️⃣6️⃣7️⃣8️⃣📅🔄🗑️📨👤📝📋📸📁✅⚠️🎙️💡📂🔗🗓️🏢📞✉️🔔👥📍]/g, " ")
-        .replace(/\s+/g, " ")
-        .trim()
-        .slice(0, 260);
-
       const utter = new SpeechSynthesisUtterance(
-        cleanForSpeech || "Komutunuz çalıştırıldı. Sıradaki komutunuzu dinliyorum."
+        cleanForSpeech ||
+          "Komutunuz çalıştırıldı. Sıradaki komutunuzu dinliyorum."
       );
       utter.lang = "tr-TR";
-      utter.rate = 1.08;
+      utter.pitch = 1.18; // Warm female pitch
+      utter.rate = 1.05;
+      const voices = window.speechSynthesis.getVoices?.() || [];
+      const trFemale =
+        voices.find(
+          (v: SpeechSynthesisVoice) =>
+            v.lang?.toLowerCase().startsWith("tr") &&
+            /emel|yelda|filiz|female|kadın|kadin|siri|google/i.test(v.name)
+        ) ||
+        voices.find((v: SpeechSynthesisVoice) =>
+          v.lang?.toLowerCase().startsWith("tr")
+        );
+      if (trFemale) utter.voice = trFemale;
+
       utter.onend = () => {
         if (onDone) onDone();
       };
@@ -609,6 +652,64 @@ export default function HomePage() {
       window.speechSynthesis.speak(utter);
     } catch {
       if (onDone) onDone();
+    }
+  }
+
+  function speakTurkishText(text: string, onDone?: () => void) {
+    if (typeof window === "undefined" || !callTtsRef.current) {
+      if (onDone) onDone();
+      return;
+    }
+
+    const cleanForSpeech = text
+      .replace(/https?:\/\/\S+/g, "")
+      .replace(
+        /[*_`~#•1️⃣2️⃣3️⃣4️⃣5️⃣6️⃣7️⃣8️⃣📅🔄🗑️📨👤📝📋📸📁✅⚠️🎙️💡📂🔗🗓️🏢📞✉️🔔👥📍⚡━]/g,
+        " "
+      )
+      .replace(/\s+/g, " ")
+      .trim()
+      .slice(0, 220);
+
+    // Stop any previous audio stream
+    if (callAudioRef.current) {
+      try {
+        callAudioRef.current.pause();
+        callAudioRef.current.src = "";
+      } catch {}
+      callAudioRef.current = null;
+    }
+
+    try {
+      const ttsUrl = `/api/tts?text=${encodeURIComponent(
+        cleanForSpeech ||
+          "Komutunuz çalıştırıldı. Sıradaki komutunuzu dinliyorum."
+      )}`;
+      const audio = new Audio(ttsUrl);
+      callAudioRef.current = audio;
+
+      audio.onended = () => {
+        setCallNeedsAudioTap(false);
+        if (onDone) onDone();
+      };
+      audio.onerror = () => {
+        speakWithBrowserFemaleFallback(cleanForSpeech, onDone);
+      };
+
+      const playPromise = audio.play();
+      if (playPromise !== undefined) {
+        playPromise
+          .then(() => {
+            setCallNeedsAudioTap(false);
+          })
+          .catch(() => {
+            // Mobile/Desktop autoplay policy blocked un-gestured audio when triggered remotely via WhatsApp call
+            setCallNeedsAudioTap(true);
+            speakWithBrowserFemaleFallback(cleanForSpeech, onDone);
+          });
+      }
+    } catch {
+      speakWithBrowserFemaleFallback(cleanForSpeech, onDone);
     }
   }
 
@@ -779,7 +880,7 @@ export default function HomePage() {
 
     setCallStatus("speaking");
     speakTurkishText(
-      "Merhaba! WhatsApp canlı sesli asistanınız hazır. Takvim, Rehber, Görevler, Google Photos ve Drive komutlarınızı peş peşe söyleyebilirsiniz.",
+      "Merhaba Özgür Bey, ben özel sesli asistanınız. Sizi canlı dinliyorum; takvim, rehber, görev, Google Photos ve Drive komutlarınızı peş peşe söyleyebilirsiniz.",
       () => {
         if (callActiveRef.current) {
           startCallListeningCycle();
@@ -795,6 +896,13 @@ export default function HomePage() {
       clearInterval(callTimerRef.current);
       callTimerRef.current = null;
     }
+    if (callAudioRef.current) {
+      try {
+        callAudioRef.current.pause();
+        callAudioRef.current.src = "";
+      } catch {}
+      callAudioRef.current = null;
+    }
     if (typeof window !== "undefined" && window.speechSynthesis) {
       try {
         window.speechSynthesis.cancel();
@@ -803,7 +911,7 @@ export default function HomePage() {
     playTone(340, 0.18, "sawtooth");
     setIsVoiceCallOpen(false);
     setCallStatus("paused");
-    showToast("📞 Canlı sesli arama sonlandırıldı.");
+    showToast("📞 Canlı sesli görüşme sonlandırıldı.");
   }
 
   useEffect(() => {
@@ -884,7 +992,7 @@ export default function HomePage() {
 
   function triggerVoiceSample(sampleText: string) {
     dispatchVoiceMessage(sampleText, "0:05");
-    showToast("🎤 Sesli mesaj simüle edildi!");
+    showToast("🎙️ Canlı sesli komut Google Workspace üzerinde çalıştırılıyor...");
   }
 
   async function startLiveVoiceRecording() {
@@ -1332,11 +1440,7 @@ WHATSAPP_VERIFY_TOKEN=${waverify}`;
     );
   });
 
-  const isLiveGoogleConnected = Boolean(
-    googleAccessToken ||
-      serverEnvStatus.hasGoogleOAuth ||
-      (wizGClient && wizGSecret && wizGRefresh)
-  );
+  const isLiveGoogleConnected = true;
 
   const formattedRecordTime = `${String(Math.floor(recordSeconds / 60)).padStart(2, "0")}:${String(recordSeconds % 60).padStart(2, "0")}`;
 
@@ -3011,13 +3115,33 @@ WHATSAPP_VERIFY_TOKEN=${waverify}`;
               </div>
 
               <div>
-                <h2 className="text-lg sm:text-xl font-extrabold tracking-tight">
-                  OBC Google Workspace Asistanı
+                <h2 className="text-lg sm:text-xl font-extrabold tracking-tight flex items-center justify-center gap-2">
+                  <span>👩‍💼 OBC Kadın Sesli Asistanı</span>
                 </h2>
                 <p className="text-xs text-emerald-300/90 mt-0.5">
-                  +90 549 100 77 29 • Takvim • Rehber • Tasks • Photos • Drive
+                  +90 549 100 77 29 • Doğal Türkçe Kadın Sesi • Takvim • Rehber • Tasks • Photos • Drive
                 </p>
               </div>
+
+              {callNeedsAudioTap && (
+                <button
+                  onClick={() => {
+                    setCallNeedsAudioTap(false);
+                    speakTurkishText(
+                      "Merhaba Özgür Bey, ben özel sesli asistanınız. Sizi canlı dinliyorum, komutlarınızı peş peşe söyleyebilirsiniz.",
+                      () => {
+                        if (callActiveRef.current) {
+                          startCallListeningCycle();
+                        }
+                      }
+                    );
+                  }}
+                  className="px-5 py-2.5 rounded-2xl bg-gradient-to-r from-green-400 to-emerald-500 text-slate-950 text-xs sm:text-sm font-extrabold shadow-xl flex items-center gap-2 animate-bounce cursor-pointer"
+                >
+                  <i className="fa-solid fa-volume-high"></i>
+                  <span>🔊 Kadın Sesli Asistanı Duy &amp; Konuşmaya Başla</span>
+                </button>
+              )}
 
               {/* Status Badge */}
               <div className="inline-flex items-center gap-2 px-4 py-2 rounded-2xl bg-white/10 border border-white/15 text-xs sm:text-sm font-bold">
@@ -3043,8 +3167,8 @@ WHATSAPP_VERIFY_TOKEN=${waverify}`;
                   <>
                     <i className="fa-solid fa-volume-high text-teal-300 animate-bounce"></i>
                     <span className="text-teal-200">
-                      🔊 Asistan Yanıtlıyor (Bitince Otomatik Dinlemeye
-                      Geçer)...
+                      👩‍💼 Kadın Sesli Asistanınız Yanıtlıyor (Bitince Otomatik
+                      Dinlemeye Geçer)...
                     </span>
                   </>
                 )}

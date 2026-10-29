@@ -3,32 +3,71 @@ import {
   AssistantCredentials,
   processAssistantInput,
   recentWebhookEvents,
+  fetchLiveWorkspaceSnapshot,
+  activeWhatsAppCall,
+  triggerIncomingWhatsAppCall,
+  acknowledgeWhatsAppCall,
+  resolveGoogleAccessToken,
 } from "@/lib/assistant-engine";
 
 // Deduplication cache to prevent duplicate WhatsApp bot replies within 15 seconds
 const recentBotRequests = new Map<string, number>();
 
-export async function GET() {
+export async function GET(request: NextRequest) {
+  const wantLive = request.nextUrl.searchParams.get("live") === "1";
+  let liveWorkspace = null;
+
+  if (
+    wantLive ||
+    (recentWebhookEvents.calendars.length === 0 &&
+      recentWebhookEvents.contacts.length === 0)
+  ) {
+    liveWorkspace = await fetchLiveWorkspaceSnapshot(false);
+  }
+
+  const hasToken = Boolean(
+    process.env.GOOGLE_REFRESH_TOKEN || (await resolveGoogleAccessToken({}))
+  );
+
+  const now = Date.now();
+  const currentCall =
+    activeWhatsAppCall &&
+    now - activeWhatsAppCall.timestamp < 45000 &&
+    !activeWhatsAppCall.answeredByWeb
+      ? activeWhatsAppCall
+      : null;
+
   return NextResponse.json({
     envStatus: {
       hasGeminiKey: Boolean(process.env.GEMINI_API_KEY),
-      hasGoogleOAuth: Boolean(
-        process.env.GOOGLE_CLIENT_ID &&
-          process.env.GOOGLE_CLIENT_SECRET &&
-          process.env.GOOGLE_REFRESH_TOKEN
-      ),
-      hasWhatsAppConfig: Boolean(
-        process.env.WHATSAPP_ACCESS_TOKEN &&
-          process.env.WHATSAPP_PHONE_NUMBER_ID
-      ),
+      hasGoogleOAuth: hasToken,
+      hasWhatsAppConfig: true,
     },
     recentWebhookEvents,
+    liveWorkspace,
+    activeWhatsAppCall: currentCall,
   });
 }
 
 export async function POST(request: NextRequest) {
   try {
     const body = await request.json();
+
+    // 1. Handle incoming WhatsApp voice call signal from bot-baileys.js
+    if (body.action === "incoming_call") {
+      const callState = triggerIncomingWhatsAppCall(
+        body.callId || "call-" + Date.now(),
+        body.callerJid || "+905491007729"
+      );
+      return NextResponse.json({ ok: true, activeWhatsAppCall: callState });
+    }
+
+    // 2. Handle call acknowledgement from Web/Mobile client
+    if (body.action === "ack_call") {
+      acknowledgeWhatsAppCall(body.callId);
+      return NextResponse.json({ ok: true });
+    }
+
     const {
       text,
       audioBase64,

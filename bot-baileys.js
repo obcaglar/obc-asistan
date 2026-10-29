@@ -5,6 +5,8 @@ require("dotenv").config();
 const fs = require("fs");
 const path = require("path");
 const http = require("http");
+const crypto = require("crypto");
+const { exec } = require("child_process");
 const {
   default: makeWASocket,
   useMultiFileAuthState,
@@ -324,7 +326,65 @@ const processedMediaSignatures = new Map();
 const inFlightJids = new Set();
 const lastCommandTimePerJid = new Map();
 const lastBotReplyTimePerJid = new Map();
+const botSendingVoiceUntil = new Map();
+const activeVoiceCallJids = new Map();
 const BOT_INVISIBLE_MARKER = "\u200B";
+
+async function generateTurkishFemaleVoiceBuffer(rawText) {
+  try {
+    const cleaned = String(rawText || "")
+      .replace(/https?:\/\/\S+/g, "")
+      .replace(
+        /[*_`~#•1️⃣2️⃣3️⃣4️⃣5️⃣6️⃣7️⃣8️⃣📅🔄🗑️📨👤📝📋📸📁✅⚠️🎙️💡📂🔗🗓️🏢📞✉️🔔👥📍⚡━]/g,
+        " "
+      )
+      .replace(/\s+/g, " ")
+      .trim()
+      .slice(0, 185);
+    if (!cleaned) return null;
+
+    const url = `https://translate.googleapis.com/translate_tts?client=gtx&ie=UTF-8&tl=tr&dt=t&q=${encodeURIComponent(
+      cleaned
+    )}`;
+    const res = await axios.get(url, {
+      responseType: "arraybuffer",
+      timeout: 7000,
+      headers: {
+        "User-Agent":
+          "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+      },
+    });
+    if (res.data && res.data.byteLength > 200) {
+      return Buffer.from(res.data);
+    }
+  } catch {}
+  return null;
+}
+
+async function sendFemaleVoiceNoteSafely(sock, jid, speechText) {
+  const ttsBuf = await generateTurkishFemaleVoiceBuffer(speechText);
+  if (!ttsBuf) return;
+
+  try {
+    const sha256 = crypto.createHash("sha256").update(ttsBuf).digest("base64");
+    processedMediaSignatures.set(`media:${sha256}`, Date.now());
+    processedMediaSignatures.set(`media:${ttsBuf.length}`, Date.now());
+    botSendingVoiceUntil.set(jid, Date.now() + 9000);
+
+    const sentVoice = await sock.sendMessage(jid, {
+      audio: ttsBuf,
+      mimetype: "audio/mp4",
+      ptt: true,
+    });
+    lastBotReplyTimePerJid.set(jid, Date.now());
+    if (sentVoice?.key?.id) {
+      sentBotMessageIds.add(sentVoice.key.id);
+      processedMessageIds.add(sentVoice.key.id);
+    }
+  } catch (err) {
+    console.error("Kadın sesli yanıt gönderme hatası:", err.message);
+  }
+}
 
 async function startWhatsAppBot() {
   if (reconnectTimer) {
@@ -555,6 +615,9 @@ async function startWhatsAppBot() {
         if (nowPre - ts > 25000) processedMediaSignatures.delete(k);
       }
       if (audioMsg) {
+        if (nowPre < (botSendingVoiceUntil.get(jid) || 0)) {
+          continue;
+        }
         const rawSha = audioMsg.fileSha256
           ? Buffer.from(audioMsg.fileSha256).toString("base64")
           : "";
@@ -564,6 +627,7 @@ async function startWhatsAppBot() {
         const mediaLockKey = `media:${rawSha || rawMediaKey || audioMsg.fileLength || msgId}`;
         if (
           processedMediaSignatures.has(mediaLockKey) ||
+          processedMediaSignatures.has(`media:${audioMsg.fileLength}`) ||
           inFlightJids.has(jid) ||
           nowPre - (lastCommandTimePerJid.get(jid) || 0) < 8000
         ) {
@@ -815,6 +879,26 @@ async function startWhatsAppBot() {
           }
         }
 
+        // If the user sent a voice command OR is in an active WhatsApp voice call session, also reply with a spoken Turkish Female Voice Note!
+        const inActiveCallSession =
+          Date.now() - (activeVoiceCallJids.get(jid) || 0) < 10 * 60 * 1000;
+        if (isVoice || inActiveCallSession) {
+          const summaryLines = String(result.replyText || "")
+            .split("\n")
+            .filter(
+              (l) =>
+                l.trim() &&
+                !l.includes("Sesli Komut Algılandı") &&
+                !l.includes("http")
+            )
+            .slice(0, 2)
+            .join(". ");
+          const spokenReply = result.chainedCount
+            ? `Peş peşe ${result.chainedCount} komutunuz başarıyla yerine getirildi. ${summaryLines}. Sıradaki komutunuzu dinliyorum.`
+            : `${summaryLines}. Sıradaki komutunuzu dinliyorum.`;
+          await sendFemaleVoiceNoteSafely(sock, jid, spokenReply);
+        }
+
         console.log("✅ Tekil yanıt WhatsApp üzerinden gönderildi!");
       } catch (err) {
         console.error("Asistan hatası:", err.message);
@@ -824,7 +908,9 @@ async function startWhatsAppBot() {
     }
   });
 
-  // Listen to incoming WhatsApp Voice/Video Calls & immediately send 1-tap Live Voice Call & Chained Command link
+  // Listen to incoming WhatsApp Voice/Video Calls:
+  // 1. Auto-launch the Live Female Voice Assistant UI on Web/Mobile/Desktop
+  // 2. Reply immediately in WhatsApp with a natural Turkish Female Voice Note + 1-tap auto-open link
   const recentCallNotified = new Map();
   sock.ev.on("call", async (calls) => {
     for (const call of calls) {
@@ -832,15 +918,50 @@ async function startWhatsAppBot() {
       const callerJid = call.from || call.chatId;
       if (!callerJid) continue;
       const now = Date.now();
-      if (now - (recentCallNotified.get(callerJid) || 0) < 30000) continue;
+      if (now - (recentCallNotified.get(callerJid) || 0) < 20000) continue;
       recentCallNotified.set(callerJid, now);
+      activeVoiceCallJids.set(callerJid, now);
 
+      console.log(`📞 WhatsApp Sesli Arama Algılandı (${callerJid}) -> Otomatik Kadın Sesli Asistan Başlatılıyor!`);
+
+      // 1. Stop endless ringing so the assistant can immediately answer
+      try {
+        if (typeof sock.rejectCall === "function") {
+          await sock.rejectCall(call.id, call.from);
+        }
+      } catch {}
+
+      // 2. Signal both Local and Vercel Cloud web apps so any open browser tab on Mobile or PC pops open the Live Voice Call UI automatically!
+      axios
+        .post(
+          ASSISTANT_API_URL,
+          { action: "incoming_call", callId: call.id, callerJid },
+          { timeout: 4000 }
+        )
+        .catch(() => {});
+      axios
+        .post(
+          VERCEL_API_URL,
+          { action: "incoming_call", callId: call.id, callerJid },
+          { timeout: 5000 }
+        )
+        .catch(() => {});
+
+      // 3. On Windows desktop, also auto-open the Live Female Voice Call screen in the default browser if not already open
+      if (process.platform === "win32" && !process.env.RENDER) {
+        try {
+          exec('start "" "https://obc-asistan.vercel.app/?call=1&autostart=1"');
+        } catch {}
+      }
+
+      // 4. Send the interactive Live Call Card + Spoken Turkish Female Voice Greeting directly in WhatsApp
       try {
         const callMsg =
-          `📞 *Canlı Sesli Arama & Peş Peşe Komut Modu Hazır!*\n\n` +
-          `🎙️ Asistanınızla kesintisiz sesli görüşmek ve tüm Google servislerini (Takvim, Rehber, Görevler, Photos, Drive) *peş peşe sesli komutlarla* çalıştırmak için tek tıkla Canlı Arama Ekranını açın:\n` +
-          `👉 https://obc-asistan.vercel.app/?call=1\n\n` +
-          `💡 _Alternatif olarak doğrudan bu sohbete tek bir ses kaydı içinde "ardından / daha sonra" diyerek peş peşe komut gönderebilirsiniz!_${BOT_INVISIBLE_MARKER}`;
+          `📞 *Canlı Kadın Sesli Asistanınız Çağrınızı Yanıtladı!*\n\n` +
+          `👩‍💼 *Sesli Asistan:* _"Merhaba Özgür Bey, WhatsApp aramanızı aldım! Canlı sesli görüşme ekranınız otomatik olarak açıldı."_\n\n` +
+          `📱 *Cepten veya Web'den Tek Tıkla Canlı Sesli Görüşme Ekranı:*\n` +
+          `👉 https://obc-asistan.vercel.app/?call=1&autostart=1\n\n` +
+          `🎙️ _Dilerseniz açılan canlı görüşme ekranından, dilerseniz doğrudan bu WhatsApp sohbetinden bana peş peşe sesli komut gönderebilirsiniz; her komutunuza kadın sesli mesajla yanıt vereceğim!_${BOT_INVISIBLE_MARKER}`;
         const sentCallMsg = await sock.sendMessage(callerJid, {
           text: callMsg,
         });
@@ -849,6 +970,13 @@ async function startWhatsAppBot() {
           sentBotMessageIds.add(sentCallMsg.key.id);
           processedMessageIds.add(sentCallMsg.key.id);
         }
+
+        // Send real Turkish Female Voice Note greeting inside WhatsApp!
+        await sendFemaleVoiceNoteSafely(
+          sock,
+          callerJid,
+          "Merhaba Özgür Bey, ben özel sesli asistanınız. WhatsApp aramanızı aldım ve canlı görüşme ekranınızı otomatik olarak açtım. Takvim, rehber, görev, Google Photos ve Drive komutlarınızı peş peşe söyleyebilirsiniz, sizi dinliyorum."
+        );
       } catch (err) {
         console.error("Çağrı yanıt hatası:", err.message);
       }
