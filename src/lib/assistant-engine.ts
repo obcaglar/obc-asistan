@@ -30,6 +30,7 @@ export interface CalendarItem {
   startTime: string;
   endTime: string;
   attendee: string;
+  attendeeEmail?: string;
   location: string;
   source: string;
   createdTime: string;
@@ -66,7 +67,7 @@ export interface AssistantCredentials {
   whatsappPhoneNumberId?: string;
 }
 
-export type ActionType = "create" | "update" | "delete";
+export type ActionType = "create" | "update" | "delete" | "share";
 
 export interface AssistantProcessResult {
   transcript: string;
@@ -207,6 +208,8 @@ export function parseCommandLocally(
   intent: "calendar" | "contact" | "note" | "help";
   action: ActionType;
   targetQuery?: string;
+  recipientEmail?: string;
+  recipientQuery?: string;
   calendar?: Omit<CalendarItem, "id" | "createdTime" | "source">;
   contact?: Omit<ContactItem, "id" | "addedDate">;
   note?: Omit<NoteItem, "id" | "time">;
@@ -220,40 +223,72 @@ export function parseCommandLocally(
     lower.startsWith("!kisi sil") ||
     lower.startsWith("!toplanti sil") ||
     lower.startsWith("!toplantı sil") ||
+    lower.startsWith("!gorev sil") ||
+    lower.startsWith("!görev sil") ||
     lower.startsWith("!randevu sil");
+
+  const isShare =
+    !isDelete &&
+    (lower.startsWith("!toplanti gönder") ||
+      lower.startsWith("!toplanti gonder") ||
+      lower.startsWith("!toplantı gönder") ||
+      lower.startsWith("!toplantı gonder") ||
+      lower.startsWith("!toplanti davet") ||
+      lower.startsWith("!toplantı davet") ||
+      lower.startsWith("!toplanti paylaş") ||
+      lower.startsWith("!toplantı paylaş") ||
+      lower.startsWith("!gorev gönder") ||
+      lower.startsWith("!gorev gonder") ||
+      lower.startsWith("!görev gönder") ||
+      lower.startsWith("!görev gonder") ||
+      lower.startsWith("!takvim gönder") ||
+      lower.startsWith("!takvim gonder") ||
+      lower.startsWith("!takvim paylaş") ||
+      lower.startsWith("!etkinlik gönder") ||
+      lower.startsWith("!etkinlik gonder") ||
+      (!/\b(ekle|oluştur|olustur|ayarla|planla)\b/i.test(lower) &&
+        /\b(gönder|gonder|davet\s*et|davetiye\s*gönder|paylaş|paylas|mail\s*at|epostaya\s*gönder|e-postaya\s*gönder)\b/i.test(
+          lower
+        )));
 
   const isUpdate =
     !isDelete &&
+    !isShare &&
     (/\b(güncelle|guncelle|değiştir|degistir|düzenle|duzenle|ertele|taşı|tasi)\b/i.test(
       lower
     ) ||
       lower.startsWith("!rehber güncelle") ||
       lower.startsWith("!kisi güncelle") ||
       lower.startsWith("!toplanti güncelle") ||
+      lower.startsWith("!gorev güncelle") ||
+      lower.startsWith("!görev güncelle") ||
       lower.startsWith("!randevu güncelle"));
 
   const action: ActionType = isDelete
     ? "delete"
-    : isUpdate
-      ? "update"
-      : "create";
+    : isShare
+      ? "share"
+      : isUpdate
+        ? "update"
+        : "create";
 
   // 1. CONTACTS / GOOGLE PEOPLE
   if (
-    lower.startsWith("!rehber") ||
-    lower.startsWith("!kisi") ||
-    lower.startsWith("!kişi") ||
-    lower.includes("rehbere") ||
-    lower.includes("rehberden") ||
-    lower.includes("rehberde") ||
-    lower.includes("rehber") ||
-    lower.includes("kişi ekle") ||
-    lower.includes("kişi kaydet") ||
-    lower.includes("kişi sil") ||
-    lower.includes("kişiyi sil") ||
-    lower.includes("kişi güncelle") ||
-    lower.includes("numara kaydet") ||
-    lower.includes("numarasını güncelle")
+    !isShare &&
+    (lower.startsWith("!rehber") ||
+      lower.startsWith("!kisi") ||
+      lower.startsWith("!kişi") ||
+      lower.includes("rehbere") ||
+      lower.includes("rehberden") ||
+      lower.includes("rehberde") ||
+      lower.startsWith("rehber ") ||
+      lower.includes("kişi ekle") ||
+      lower.includes("kişi kaydet") ||
+      lower.includes("kişi sil") ||
+      lower.includes("kişiyi sil") ||
+      lower.includes("kişi güncelle") ||
+      lower.includes("numara kaydet") ||
+      lower.includes("numarasını güncelle"))
   ) {
     const clean = text
       .replace(
@@ -311,23 +346,35 @@ export function parseCommandLocally(
     };
   }
 
-  // 2. CALENDAR / MEETING
+  // 2. CALENDAR / MEETING / TASK (CREATE, UPDATE, DELETE, SHARE/SEND)
   if (
     lower.startsWith("!toplanti") ||
     lower.startsWith("!toplantı") ||
     lower.startsWith("!randevu") ||
+    lower.startsWith("!gorev") ||
+    lower.startsWith("!görev") ||
+    lower.startsWith("!takvim") ||
+    lower.startsWith("!etkinlik") ||
     lower.includes("toplantı") ||
     lower.includes("toplanti") ||
     lower.includes("randevu") ||
     lower.includes("etkinlik") ||
+    lower.includes("etkinliği") ||
+    lower.includes("görev") ||
+    lower.includes("gorev") ||
     lower.includes("görüşme") ||
     lower.includes("planla") ||
-    lower.includes("takvim")
+    lower.includes("takvim") ||
+    isShare
   ) {
     const { dateStr, startTime, endTime } =
       parseDateAndTimeFromTurkishText(text);
 
-    let attendee = "WhatsApp Kullanıcısı";
+    const emailMatches =
+      text.match(/[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/g) || [];
+    const recipientEmail = emailMatches.join(", ");
+
+    let attendee = recipientEmail || "WhatsApp Kullanıcısı";
     const attendeeMatch = text.match(
       /([A-ZÇĞİÖŞÜ][a-zçğıöşü]+(?:\s+(?:Bey|Hanım|[A-ZÇĞİÖŞÜ][a-zçğıöşü]+))?)\s+ile/
     );
@@ -335,11 +382,21 @@ export function parseCommandLocally(
       attendee = attendeeMatch[1].trim();
     }
 
+    // Check if user specified a recipient person name (e.g. "Ahmet Yılmaz'a gönder" or "rehberdeki Ali Kaya'ya gönder")
+    let recipientQuery = "";
+    const toPersonMatch = text.match(
+      /(?:rehberdeki\s+)?([A-ZÇĞİÖŞÜa-zçğıöşü]+(?:\s+[A-ZÇĞİÖŞÜa-zçğıöşü]+)?)['’]?(?:a|e|ya|ye)\s+(?:gönder|gonder|davet|paylaş|paylas|ilet)/i
+    );
+    if (toPersonMatch) {
+      recipientQuery = toPersonMatch[1].trim();
+    }
+
     let title = text
       .replace(
-        /^(!toplanti\s*sil:?|!toplantı\s*sil:?|!randevu\s*sil:?|!toplanti\s*iptal:?|!toplantı\s*iptal:?|!toplanti\s*güncelle:?|!toplantı\s*güncelle:?|!randevu\s*güncelle:?|!toplanti:?|!toplantı:?|!randevu:?|toplantı\s*ayarla:?|randevu\s*ekle:?|takvimden\s*sil:?)/i,
+        /^(!toplanti\s*gönder:?|!toplanti\s*gonder:?|!toplantı\s*gönder:?|!toplanti\s*davet:?|!toplantı\s*davet:?|!toplanti\s*paylaş:?|!gorev\s*gönder:?|!gorev\s*gonder:?|!görev\s*gönder:?|!takvim\s*gönder:?|!takvim\s*paylaş:?|!etkinlik\s*gönder:?|!toplanti\s*sil:?|!toplantı\s*sil:?|!randevu\s*sil:?|!gorev\s*sil:?|!görev\s*sil:?|!toplanti\s*iptal:?|!toplantı\s*iptal:?|!toplanti\s*güncelle:?|!toplantı\s*güncelle:?|!randevu\s*güncelle:?|!gorev\s*güncelle:?|!görev\s*güncelle:?|!toplanti:?|!toplantı:?|!randevu:?|!gorev:?|!görev:?|!takvim:?|!etkinlik:?|toplantı\s*ayarla:?|randevu\s*ekle:?|takvimden\s*sil:?)/i,
         ""
       )
+      .replace(/[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/g, "")
       .replace(
         /\b(yarın|yarin|bugün|bugun|pazartesi|salı|sali|çarşamba|carsamba|perşembe|persembe|cuma|cumartesi|pazar)\b/gi,
         ""
@@ -347,15 +404,22 @@ export function parseCommandLocally(
       .replace(/\bsaat\s*\d{1,2}[:.]\d{2}('[a-zçğıöşü]+)?/gi, "")
       .replace(/\b\d{1,2}[:.]\d{2}('[a-zçğıöşü]+)?/g, "")
       .replace(
-        /\b(planla|ayarla|ekle|sil|kaldır|kaldir|iptal\s*et|iptal|güncelle|guncelle|değiştir|degistir|ertele|taşı|tasi|toplantısını|toplantisini|randevusunu|etkinliğini|olan|toplantıyı|toplantiyi|takvimden)\b/gi,
+        /\b(planla|ayarla|ekle|oluştur|olustur|sil|kaldır|kaldir|iptal\s*et|iptal|güncelle|guncelle|değiştir|degistir|ertele|taşı|tasi|gönder|gonder|davet\s*et|davet|paylaş|paylas|adresine|epostasına|e-postasına|epostaya|e-postaya|kullanıcısına|kişisine|rehberdeki|ve|toplantısını|toplantisini|randevusunu|etkinliğini|görevini|gorevini|olan|toplantıyı|toplantiyi|takvimdeki|takvimden)\b/gi,
         ""
       )
       .replace(/\s+/g, " ")
       .trim();
 
+    if (recipientQuery && title.includes(recipientQuery)) {
+      title = title
+        .replace(new RegExp(`${recipientQuery}['’]?[aey]+`, "gi"), "")
+        .replace(recipientQuery, "")
+        .trim();
+    }
+
     if (!title || title.length < 2) {
       title =
-        attendee !== "WhatsApp Kullanıcısı"
+        attendee !== "WhatsApp Kullanıcısı" && !attendee.includes("@")
           ? attendee
           : "WhatsApp Üzerinden Planlanan Görüşme";
     }
@@ -364,12 +428,15 @@ export function parseCommandLocally(
       intent: "calendar",
       action,
       targetQuery: title,
+      recipientEmail: recipientEmail || undefined,
+      recipientQuery: recipientQuery || undefined,
       calendar: {
         title,
         date: dateStr,
         startTime,
         endTime,
         attendee,
+        attendeeEmail: recipientEmail || undefined,
         location: lower.includes("ofis")
           ? "Ofis Toplantı Odası"
           : "Google Meet",
@@ -427,12 +494,15 @@ async function analyzeWithGemini(params: {
   intent: "calendar" | "contact" | "note" | "help";
   action?: ActionType;
   targetQuery?: string;
+  recipientEmail?: string;
+  recipientQuery?: string;
   calendar?: {
     title: string;
     date: string;
     startTime: string;
     endTime: string;
     attendee: string;
+    attendeeEmail?: string;
     location: string;
   };
   contact?: {
@@ -467,14 +537,17 @@ Kullanıcının gönderdiği metni veya ses kaydını incele ve tam olarak şu J
 {
   "transcript": "Ses kaydının veya yazılı mesajın tam Türkçe metni",
   "intent": "calendar" | "contact" | "note" | "help",
-  "action": "create" | "update" | "delete",
-  "targetQuery": "Güncellenecek veya silinecek toplantının/kişinin aranacağı anahtar kelime veya kişi adı (Örn: 'Ahmet Bey', 'Eşimi ara', 'Ali K')",
+  "action": "create" | "update" | "delete" | "share",
+  "targetQuery": "Güncellenecek, silinecek veya başka birine gönderilecek toplantının/görevin/kişinin aranacağı anahtar kelime (Örn: 'Bütçe Toplantısı', 'Sunucu Görevi', 'Ali K')",
+  "recipientEmail": "Etkinlik veya görev bir e-posta adresine gönderilecekse/davet edilecekse alıcı e-posta adresi (Örn: 'ahmet@ornek.com'), yoksa boş string",
+  "recipientQuery": "Etkinlik veya görev rehberdeki bir kişiye gönderilecekse o kişinin adı (Örn: 'Ahmet Yılmaz'), yoksa boş string",
   "calendar": {
-    "title": "Toplantı/Etkinlik başlığı",
+    "title": "Toplantı/Etkinlik/Görev başlığı (alıcı e-posta adresini veya 'gönder' kelimesini başlığa yazma)",
     "date": "YYYY-MM-DD",
     "startTime": "HH:mm",
     "endTime": "HH:mm",
-    "attendee": "Katılımcı adı",
+    "attendee": "Katılımcı adı veya e-posta adresi",
+    "attendeeEmail": "Varsa davet gönderilecek e-posta adresi",
     "location": "Google Meet"
   },
   "contact": {
@@ -492,12 +565,13 @@ Kullanıcının gönderdiği metni veya ses kaydını incele ve tam olarak şu J
 }
 Kurallar:
 1. "action" alanı:
-   - Yeni ekleme/kaydetme/planlama ise: "create"
-   - Mevcut bir toplantıyı veya kişiyi güncelleme/değiştirme/erteleme/saatini değiştirme ise: "update"
+   - Yeni etkinlik/toplantı/görev veya kişi ekleme/planlama ise: "create" (Eğer yeni eklerken aynı zamanda bir e-postaya/kişiye gönderilmesi isteniyorsa yine "create" seç ve "recipientEmail" / "recipientQuery" alanlarını doldur).
+   - Takvimde MEVCUT olan bir etkinliği veya görevi başka bir kullanıcıya/e-postaya gönderme/davet etme/paylaşma ise ("!toplanti gönder ...", "... toplantısını ali@gmail.com adresine gönder"): "share"
+   - Mevcut bir toplantıyı veya kişiyi güncelleme/değiştirme/erteleme ise: "update"
    - Mevcut bir toplantıyı veya kişiyi silme/kaldırma/iptal etme ise: "delete"
-2. "targetQuery" alanı: "update" veya "delete" işlemlerinde Google Takvim veya Google Rehber'de aranacak mevcut toplantı başlığı veya kişi ismidir (Örn: "Ahmet Bey ile olan toplantıyı sil" -> targetQuery: "Ahmet Bey").
-3. Mesaj "!rehber", "!kisi", "rehber", "kişi", "numara" içeriyorsa intent KESİNLİKLE "contact" olmalıdır.
-4. Mesaj "!toplanti", "!randevu", "toplantı", "randevu", "etkinlik", "takvim" içeriyorsa intent KESİNLİKLE "calendar" olmalıdır.`;
+2. "targetQuery" alanı: "update", "delete" veya "share" işlemlerinde Google Takvim veya Google Rehber'de aranacak mevcut toplantı/görev başlığı veya kişi ismidir.
+3. Mesaj "!rehber", "!kisi", "rehber", "kişi", "numara" içeriyorsa (ve bir toplantıyı/görevi birine gönderme komutu değilse) intent KESİNLİKLE "contact" olmalıdır.
+4. Mesaj "!toplanti", "!randevu", "!gorev", "!görev", "!takvim", "toplantı", "randevu", "etkinlik", "görev", "takvim" içeriyorsa intent KESİNLİKLE "calendar" olmalıdır.`;
 
   const parts: Array<Record<string, unknown>> = [{ text: systemInstruction }];
   if (params.audioBase64) {
@@ -601,6 +675,20 @@ export async function resolveGoogleAccessToken(
 // GOOGLE CALENDAR API v3: CREATE, FIND, UPDATE, DELETE
 // ============================================================================
 
+function normalizeTr(str: string): string {
+  return str
+    .toLocaleLowerCase("tr-TR")
+    .replace(/ğ/g, "g")
+    .replace(/ü/g, "u")
+    .replace(/ş/g, "s")
+    .replace(/ı/g, "i")
+    .replace(/ö/g, "o")
+    .replace(/ç/g, "c")
+    .trim();
+}
+
+const recentCalendarEventsMap = new Map<string, string>();
+
 async function findGoogleCalendarEvent(
   accessToken: string,
   query: string
@@ -608,7 +696,32 @@ async function findGoogleCalendarEvent(
 ): Promise<any | null> {
   try {
     const cleanQuery = query.trim();
-    // 1. Search with q parameter
+    const qNorm = normalizeTr(cleanQuery);
+
+    // 1. Check in-memory recent calendar events map first (0ms instant lookup)
+    for (const [cachedTitleNorm, eventId] of recentCalendarEventsMap.entries()) {
+      if (
+        cachedTitleNorm === qNorm ||
+        cachedTitleNorm.includes(qNorm) ||
+        qNorm.includes(cachedTitleNorm)
+      ) {
+        const directRes = await fetch(
+          `https://www.googleapis.com/calendar/v3/calendars/primary/events/${encodeURIComponent(eventId)}`,
+          {
+            cache: "no-store",
+            headers: { Authorization: `Bearer ${accessToken}` },
+          }
+        );
+        if (directRes.ok) {
+          const directEvent = await directRes.json();
+          if (directEvent && directEvent.id && directEvent.status !== "cancelled") {
+            return directEvent;
+          }
+        }
+      }
+    }
+
+    // 2. Search with q parameter
     const searchUrl = `https://www.googleapis.com/calendar/v3/calendars/primary/events?q=${encodeURIComponent(cleanQuery)}&singleEvents=true&orderBy=startTime&maxResults=15`;
     const res = await fetch(searchUrl, {
       cache: "no-store",
@@ -621,9 +734,9 @@ async function findGoogleCalendarEvent(
       }
     }
 
-    // 2. Fallback: fetch recent & upcoming events and fuzzy-match Turkish summary
-    const minDate = new Date(Date.now() - 7 * 86400000).toISOString();
-    const listUrl = `https://www.googleapis.com/calendar/v3/calendars/primary/events?timeMin=${encodeURIComponent(minDate)}&singleEvents=true&orderBy=startTime&maxResults=50`;
+    // 3. Fallback: fetch recent & upcoming events (up to 250) and score Turkish-normalized summary
+    const minDate = new Date(Date.now() - 86400000).toISOString();
+    const listUrl = `https://www.googleapis.com/calendar/v3/calendars/primary/events?timeMin=${encodeURIComponent(minDate)}&singleEvents=true&orderBy=startTime&maxResults=250`;
     const listRes = await fetch(listUrl, {
       cache: "no-store",
       headers: { Authorization: `Bearer ${accessToken}` },
@@ -631,24 +744,71 @@ async function findGoogleCalendarEvent(
     if (listRes.ok) {
       const listData = await listRes.json();
       const items = Array.isArray(listData.items) ? listData.items : [];
-      const qLower = cleanQuery.toLocaleLowerCase("tr-TR");
-      const words = qLower.split(/\s+/).filter((w) => w.length >= 3);
+      const words = qNorm.split(/\s+/).filter((w) => w.length >= 3);
+
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      let bestItem: any = null;
+      let bestScore = 0;
 
       for (const item of items) {
-        const sumLower = String(item.summary || "").toLocaleLowerCase("tr-TR");
-        if (
-          sumLower.includes(qLower) ||
-          qLower.includes(sumLower) ||
-          words.some((w) => sumLower.includes(w))
-        ) {
-          return item;
+        const sumNorm = normalizeTr(String(item.summary || ""));
+        if (!sumNorm) continue;
+
+        let score = 0;
+        if (sumNorm === qNorm) {
+          score = 100;
+        } else if (sumNorm.includes(qNorm) || qNorm.includes(sumNorm)) {
+          score = 80;
+        } else if (words.length > 0) {
+          const matchedWords = words.filter((w) => sumNorm.includes(w)).length;
+          score = matchedWords * 20;
+        }
+
+        if (score >= bestScore && score > 0) {
+          bestScore = score;
+          bestItem = item;
         }
       }
+
+      if (bestItem) return bestItem;
     }
     return null;
   } catch {
     return null;
   }
+}
+
+async function resolveRecipientEmails(
+  accessToken: string | null,
+  rawEmailStr?: string,
+  recipientQuery?: string
+): Promise<{ emails: string[]; resolvedContactName?: string }> {
+  const emailList: string[] = [];
+  if (rawEmailStr) {
+    const matches =
+      rawEmailStr.match(/[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/g) ||
+      [];
+    for (const m of matches) {
+      const lower = m.toLowerCase();
+      if (!emailList.includes(lower)) emailList.push(lower);
+    }
+  }
+
+  let resolvedContactName: string | undefined;
+  if (emailList.length === 0 && recipientQuery && accessToken) {
+    const contactPerson = await findGooglePersonContact(
+      accessToken,
+      recipientQuery
+    );
+    const contactEmail = contactPerson?.emailAddresses?.[0]?.value;
+    if (contactEmail) {
+      emailList.push(String(contactEmail).toLowerCase());
+      resolvedContactName =
+        contactPerson?.names?.[0]?.displayName || recipientQuery;
+    }
+  }
+
+  return { emails: emailList, resolvedContactName };
 }
 
 async function createGoogleCalendarEvent(
@@ -659,15 +819,33 @@ async function createGoogleCalendarEvent(
     startTime: string;
     endTime: string;
     attendee: string;
+    attendeeEmail?: string;
     location: string;
-  }
-): Promise<{ htmlLink?: string; ok: boolean; error?: string }> {
+  },
+  recipientQuery?: string
+): Promise<{
+  htmlLink?: string;
+  ok: boolean;
+  invitedEmails?: string[];
+  error?: string;
+}> {
   try {
     const startDateTime = `${evt.date}T${evt.startTime}:00+03:00`;
     const endDateTime = `${evt.date}T${evt.endTime}:00+03:00`;
 
+    const { emails } = await resolveRecipientEmails(
+      accessToken,
+      evt.attendeeEmail || evt.attendee,
+      recipientQuery ||
+        (evt.attendee !== "WhatsApp Kullanıcısı" && !evt.attendee.includes("@")
+          ? evt.attendee
+          : undefined)
+    );
+
+    const sendUpdatesParam = emails.length > 0 ? "?sendUpdates=all" : "";
+
     const res = await fetch(
-      "https://www.googleapis.com/calendar/v3/calendars/primary/events",
+      `https://www.googleapis.com/calendar/v3/calendars/primary/events${sendUpdatesParam}`,
       {
         method: "POST",
         cache: "no-store",
@@ -687,6 +865,12 @@ async function createGoogleCalendarEvent(
             dateTime: endDateTime,
             timeZone: "Europe/Istanbul",
           },
+          ...(emails.length > 0
+            ? {
+                attendees: emails.map((email) => ({ email })),
+                guestsCanSeeOtherGuests: true,
+              }
+            : {}),
         }),
       }
     );
@@ -699,7 +883,108 @@ async function createGoogleCalendarEvent(
       };
     }
 
-    return { ok: true, htmlLink: data.htmlLink };
+    if (data?.id) {
+      recentCalendarEventsMap.set(normalizeTr(evt.title), data.id);
+    }
+
+    return {
+      ok: true,
+      htmlLink: data.htmlLink,
+      invitedEmails: emails.length > 0 ? emails : undefined,
+    };
+  } catch (err) {
+    return {
+      ok: false,
+      error: err instanceof Error ? err.message : "Bilinmeyen hata",
+    };
+  }
+}
+
+async function shareGoogleCalendarEvent(
+  accessToken: string,
+  targetQuery: string,
+  rawEmailStr?: string,
+  recipientQuery?: string
+): Promise<{
+  ok: boolean;
+  htmlLink?: string;
+  matchedTitle?: string;
+  invitedEmails?: string[];
+  resolvedContactName?: string;
+  error?: string;
+}> {
+  try {
+    const { emails, resolvedContactName } = await resolveRecipientEmails(
+      accessToken,
+      rawEmailStr,
+      recipientQuery
+    );
+
+    if (emails.length === 0) {
+      return {
+        ok: false,
+        error: recipientQuery
+          ? `"${recipientQuery}" adlı kişinin Google Rehber'de kayıtlı e-posta adresi bulunamadı. Lütfen doğrudan e-posta adresi yazın (Örn: ali@gmail.com).`
+          : "Gönderilecek alıcı e-posta adresi belirtilmedi.",
+      };
+    }
+
+    const existing = await findGoogleCalendarEvent(accessToken, targetQuery);
+    if (!existing || !existing.id) {
+      return {
+        ok: false,
+        error: `"${targetQuery}" ile eşleşen bir Google Takvim etkinliği/görevi bulunamadı.`,
+      };
+    }
+
+    const existingAttendees = Array.isArray(existing.attendees)
+      ? existing.attendees
+      : [];
+    const existingEmailSet = new Set(
+      existingAttendees
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        .map((a: any) => String(a.email || "").toLowerCase())
+        .filter(Boolean)
+    );
+
+    const mergedAttendees = [...existingAttendees];
+    for (const email of emails) {
+      if (!existingEmailSet.has(email.toLowerCase())) {
+        mergedAttendees.push({ email });
+      }
+    }
+
+    const res = await fetch(
+      `https://www.googleapis.com/calendar/v3/calendars/primary/events/${encodeURIComponent(existing.id)}?sendUpdates=all`,
+      {
+        method: "PATCH",
+        cache: "no-store",
+        headers: {
+          Authorization: `Bearer ${accessToken}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          attendees: mergedAttendees,
+          guestsCanSeeOtherGuests: true,
+        }),
+      }
+    );
+
+    const data = await res.json();
+    if (!res.ok) {
+      return {
+        ok: false,
+        error: data?.error?.message || "Etkinlik/görev daveti gönderilemedi",
+      };
+    }
+
+    return {
+      ok: true,
+      htmlLink: data.htmlLink,
+      matchedTitle: existing.summary || targetQuery,
+      invitedEmails: emails,
+      resolvedContactName,
+    };
   } catch (err) {
     return {
       ok: false,
@@ -1136,6 +1421,8 @@ export async function processAssistantInput(params: {
     intent: "calendar" | "contact" | "note" | "help";
     action: ActionType;
     targetQuery?: string;
+    recipientEmail?: string;
+    recipientQuery?: string;
     calendar?: Omit<CalendarItem, "id" | "createdTime" | "source">;
     contact?: Omit<ContactItem, "id" | "addedDate">;
     note?: Omit<NoteItem, "id" | "time">;
@@ -1161,6 +1448,8 @@ export async function processAssistantInput(params: {
           intent: geminiResult.intent || "help",
           action: geminiResult.action || "create",
           targetQuery: geminiResult.targetQuery,
+          recipientEmail: geminiResult.recipientEmail,
+          recipientQuery: geminiResult.recipientQuery,
           calendar: geminiResult.calendar,
           contact: geminiResult.contact,
           note: geminiResult.note,
@@ -1197,12 +1486,17 @@ export async function processAssistantInput(params: {
     parsed.calendar?.title ||
     parsed.contact?.name ||
     "";
+  const recipientEmail =
+    parsed.recipientEmail ||
+    localParsed.recipientEmail ||
+    parsed.calendar?.attendeeEmail;
+  const recipientQuery = parsed.recipientQuery || localParsed.recipientQuery;
 
   const accessToken = await resolveGoogleAccessToken(creds);
   let syncedToGoogle = false;
   let googleSyncError: string | undefined;
 
-  // ==================== 1. CALENDAR (CREATE / UPDATE / DELETE) ====================
+  // ==================== 1. CALENDAR (CREATE / UPDATE / DELETE / SHARE) ====================
   if (parsed.intent === "calendar") {
     const calData = parsed.calendar ||
       localParsed.calendar || {
@@ -1210,9 +1504,79 @@ export async function processAssistantInput(params: {
         date: formatIsoDate(getIstanbulNow()),
         startTime: "15:00",
         endTime: "16:00",
-        attendee: "WhatsApp Kullanıcısı",
+        attendee: recipientEmail || "WhatsApp Kullanıcısı",
+        attendeeEmail: recipientEmail,
         location: "Google Meet",
       };
+
+    if (recipientEmail && !calData.attendeeEmail) {
+      calData.attendeeEmail = recipientEmail;
+    }
+
+    if (action === "share") {
+      let matchedTitle = targetQuery || calData.title;
+      let invitedEmails: string[] | undefined;
+      let resolvedContactName: string | undefined;
+      let htmlLink: string | undefined;
+
+      if (accessToken) {
+        const shareRes = await shareGoogleCalendarEvent(
+          accessToken,
+          matchedTitle,
+          recipientEmail || transcript,
+          recipientQuery
+        );
+        syncedToGoogle = shareRes.ok;
+        htmlLink = shareRes.htmlLink;
+        if (shareRes.matchedTitle) matchedTitle = shareRes.matchedTitle;
+        invitedEmails = shareRes.invitedEmails;
+        resolvedContactName = shareRes.resolvedContactName;
+        googleSyncError = shareRes.error;
+      }
+
+      const recipientDisplay = invitedEmails?.length
+        ? resolvedContactName
+          ? `${resolvedContactName} (${invitedEmails.join(", ")})`
+          : invitedEmails.join(", ")
+        : recipientEmail || recipientQuery || "Alıcı";
+
+      const replyText =
+        `📨 *Google Takvim Etkinliği / Görevi Gönderildi!*\n\n` +
+        `📌 *Etkinlik / Görev:* ${matchedTitle}\n` +
+        `✉️ *Gönderilen Alıcı:* ${recipientDisplay}` +
+        (syncedToGoogle
+          ? `\n✅ *Google Takvim üzerinden karşı tarafa resmi e-posta ve takvim daveti gönderildi!*`
+          : googleSyncError
+            ? `\n⚠️ _${googleSyncError}_`
+            : "");
+
+      return {
+        transcript,
+        intent: "calendar",
+        action: "share",
+        targetQuery: matchedTitle,
+        replyText,
+        usedGemini,
+        syncedToGoogle,
+        googleSyncError,
+        calendarEvent: {
+          id: "evt-" + Date.now(),
+          title: matchedTitle,
+          date: calData.date,
+          startTime: calData.startTime,
+          endTime: calData.endTime,
+          attendee: recipientDisplay,
+          attendeeEmail: invitedEmails?.join(", ") || recipientEmail,
+          location: calData.location || "Google Meet",
+          source: isVoice
+            ? "🎙️ WhatsApp Sesli Davet"
+            : "💬 WhatsApp E-posta Daveti",
+          createdTime: "Gönderildi",
+          htmlLink,
+          syncedWithGoogle: syncedToGoogle,
+        },
+      };
+    }
 
     if (action === "delete") {
       let deletedTitle = targetQuery || calData.title;
@@ -1302,12 +1666,18 @@ export async function processAssistantInput(params: {
       };
     }
 
-    // CREATE CALENDAR EVENT
+    // CREATE CALENDAR EVENT (with optional immediate email invitation)
     let htmlLink: string | undefined;
+    let invitedEmails: string[] | undefined;
     if (accessToken) {
-      const calRes = await createGoogleCalendarEvent(accessToken, calData);
+      const calRes = await createGoogleCalendarEvent(
+        accessToken,
+        calData,
+        recipientQuery
+      );
       syncedToGoogle = calRes.ok;
       htmlLink = calRes.htmlLink;
+      invitedEmails = calRes.invitedEmails;
       googleSyncError = calRes.error;
     }
 
@@ -1317,7 +1687,9 @@ export async function processAssistantInput(params: {
       date: calData.date,
       startTime: calData.startTime,
       endTime: calData.endTime,
-      attendee: calData.attendee || "WhatsApp Kullanıcısı",
+      attendee:
+        invitedEmails?.join(", ") || calData.attendee || "WhatsApp Kullanıcısı",
+      attendeeEmail: invitedEmails?.join(", ") || calData.attendeeEmail,
       location: calData.location || "Google Meet",
       source: isVoice ? "🎙️ WhatsApp Sesli Komut" : "💬 WhatsApp Metin Komutu",
       createdTime: "Şimdi",
@@ -1326,11 +1698,13 @@ export async function processAssistantInput(params: {
     };
 
     const syncTag = syncedToGoogle
-      ? "\n✅ *Gerçek Google Takvim'inize senkronize edildi!*"
+      ? invitedEmails?.length
+        ? `\n📨 *Davet Gönderilen E-posta:* ${invitedEmails.join(", ")}\n✅ *Gerçek Google Takvim'inize eklendi ve karşı tarafa e-posta daveti gönderildi!*`
+        : "\n✅ *Gerçek Google Takvim'inize senkronize edildi!*"
       : "";
 
     const replyText =
-      `📅 *Google Takvim'e Etkinlik Eklendi!*\n\n` +
+      `📅 *Google Takvim'e Etkinlik / Görev Eklendi!*\n\n` +
       `📌 *Başlık:* ${calendarEvent.title}\n` +
       `🗓️ *Tarih:* ${calendarEvent.date}, ${calendarEvent.startTime} - ${calendarEvent.endTime}\n` +
       `👥 *Katılımcı:* ${calendarEvent.attendee}\n` +

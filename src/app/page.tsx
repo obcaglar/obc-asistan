@@ -341,6 +341,23 @@ export default function HomePage() {
               ? "🗑️ Etkinlik gerçek Google Takvim'inizden silindi!"
               : "🗑️ Etkinlik takvimden silindi!"
           );
+        } else if (result.action === "share") {
+          setCalendarEvents((prev) => [
+            result.calendarEvent!,
+            ...prev.filter(
+              (e) =>
+                !e.title
+                  .toLocaleLowerCase("tr-TR")
+                  .includes(
+                    result.calendarEvent!.title.toLocaleLowerCase("tr-TR")
+                  )
+            ),
+          ]);
+          showToast(
+            result.syncedToGoogle
+              ? "📨 Etkinlik/görev e-posta daveti olarak karşı tarafa gönderildi!"
+              : "📨 Etkinlik daveti oluşturuldu!"
+          );
         } else if (result.action === "update") {
           setCalendarEvents((prev) => [
             result.calendarEvent!,
@@ -1214,10 +1231,13 @@ WHATSAPP_VERIFY_TOKEN=${waverify}`;
                   >
                     <div className="font-semibold text-blue-700 flex items-center gap-1">
                       <i className="fa-regular fa-calendar-plus"></i> Google
-                      Takvim (Ekle / Güncelle / Sil):
+                      Takvim (Ekle / Gönder / Güncelle / Sil):
                     </div>
                     <code className="text-[10px] text-slate-600 block mt-0.5 bg-white p-1 rounded border border-slate-200">
                       !toplanti Yarın 14:00 Bütçe Toplantısı
+                    </code>
+                    <code className="text-[10px] text-slate-600 block mt-1 bg-white p-1 rounded border border-slate-200">
+                      !toplanti gönder Bütçe Toplantısı ali@ornek.com
                     </code>
                     <code className="text-[10px] text-slate-600 block mt-1 bg-white p-1 rounded border border-slate-200">
                       !toplanti güncelle Bütçe Toplantısı Yarın 16:30

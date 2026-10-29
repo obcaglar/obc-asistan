@@ -316,6 +316,7 @@ async function startWhatsAppBot() {
         text.startsWith("📅 *Google Takvim") ||
         text.startsWith("🔄 *Google Takvim") ||
         text.startsWith("🗑️ *Google Takvim") ||
+        text.startsWith("📨 *Google Takvim") ||
         text.startsWith("👤 *Google Kişiler") ||
         text.startsWith("🔄 *Google Kişiler") ||
         text.startsWith("🗑️ *Google Kişiler") ||
@@ -336,6 +337,8 @@ async function startWhatsAppBot() {
         lower.includes("toplanti") ||
         lower.includes("randevu") ||
         lower.includes("etkinlik") ||
+        lower.includes("görev") ||
+        lower.includes("gorev") ||
         lower.includes("takvim") ||
         lower.includes("rehber") ||
         lower.includes("kişi") ||
@@ -343,6 +346,11 @@ async function startWhatsAppBot() {
         lower.includes("numara") ||
         lower.includes("kaydet") ||
         lower.includes("ekle") ||
+        lower.includes("gönder") ||
+        lower.includes("gonder") ||
+        lower.includes("davet") ||
+        lower.includes("paylaş") ||
+        lower.includes("paylas") ||
         lower.includes("güncelle") ||
         lower.includes("guncelle") ||
         lower.includes("değiştir") ||
