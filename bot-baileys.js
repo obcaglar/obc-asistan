@@ -136,7 +136,7 @@ async function getGoogleAccessToken() {
   }
 }
 
-async function processStandaloneCloud( { text, audioBase64, mimeType, isVoice } ) {
+async function processStandaloneCloud({ text, audioBase64, mimeType, isVoice }) {
   const geminiKey = process.env.GEMINI_API_KEY;
   const nowStr = new Date().toLocaleString("en-US", {
     timeZone: "Europe/Istanbul",
@@ -146,39 +146,58 @@ async function processStandaloneCloud( { text, audioBase64, mimeType, isVoice } 
 
   let parsed = null;
   if (geminiKey) {
-    try {
-      const prompt = `Sen Türkçe çalışan bir WhatsApp & Google Workspace Asistanısın. Bugünün tarihi: ${todayIso}.
-Kullanıcının mesajını veya sesini incele ve JSON döndür:
+    const prompt = `Sen Türkçe çalışan bir WhatsApp & Google Workspace Asistanısın. Bugünün tarihi: ${todayIso}.
+Kullanıcının mesajını veya Türkçe ses kaydını incele ve JSON döndür:
 {
-  "transcript": "Söylenen veya yazılan metin",
+  "transcript": "Söylenen veya yazılan tam Türkçe metin",
   "intent": "calendar" | "contact" | "note" | "help",
   "calendar": { "title": "...", "date": "YYYY-MM-DD", "startTime": "HH:mm", "endTime": "HH:mm", "attendee": "...", "location": "Google Meet" },
   "contact": { "name": "...", "phone": "...", "email": "...", "company": "...", "notes": "..." },
   "note": { "title": "...", "content": "...", "category": "WhatsApp Notu" }
 }`;
-      const parts = [{ text: prompt }];
-      if (audioBase64) {
-        parts.push({
-          inlineData: { mimeType: mimeType || "audio/ogg", data: audioBase64 },
-        });
-      }
-      if (text) {
-        parts.push({ text: `Kullanıcı mesajı: ${text}` });
-      }
-      const gRes = await axios.post(
-        `https://generativelanguage.googleapis.com/v1beta/models/gemini-3-flash-preview:generateContent?key=${encodeURIComponent(geminiKey)}`,
-        {
-          contents: [{ parts }],
-          generationConfig: {
-            responseMimeType: "application/json",
-            temperature: 0.1,
+    const cleanMimeType =
+      (mimeType || "audio/ogg").split(";")[0].trim() || "audio/ogg";
+    const parts = [{ text: prompt }];
+    if (audioBase64) {
+      parts.push({
+        inlineData: { mimeType: cleanMimeType, data: audioBase64 },
+      });
+    }
+    if (text) {
+      parts.push({ text: `Kullanıcı mesajı: ${text}` });
+    }
+
+    const candidateModels = [
+      "gemini-3.5-flash",
+      "gemini-3.6-flash",
+      "gemini-3.5-flash-lite",
+      "gemini-3.1-flash-lite",
+      "gemini-flash-lite-latest",
+    ];
+
+    for (const modelName of candidateModels) {
+      try {
+        const gRes = await axios.post(
+          `https://generativelanguage.googleapis.com/v1beta/models/${modelName}:generateContent?key=${encodeURIComponent(geminiKey)}`,
+          {
+            contents: [{ parts }],
+            generationConfig: {
+              responseMimeType: "application/json",
+              temperature: 0.1,
+            },
           },
+          { timeout: 8000 }
+        );
+        const rawJson = gRes.data?.candidates?.[0]?.content?.parts?.[0]?.text;
+        if (rawJson) {
+          parsed = JSON.parse(
+            rawJson.replace(/^```json\s*/i, "").replace(/```\s*$/i, "").trim()
+          );
+          break;
         }
-      );
-      const rawJson = gRes.data?.candidates?.[0]?.content?.parts?.[0]?.text;
-      if (rawJson) parsed = JSON.parse(rawJson);
-    } catch (e) {
-      console.error("Gemini doğrudan çağrı hatası:", e.message);
+      } catch (e) {
+        // Try next model
+      }
     }
   }
 
@@ -212,6 +231,7 @@ Kullanıcının mesajını veya sesini incele ve JSON döndür:
       }
     }
     return {
+      transcript: parsed.transcript,
       replyText:
         `📅 *Google Takvim'e Etkinlik Eklendi!*\n\n` +
         `📌 *Başlık:* ${evt.title}\n` +
@@ -244,6 +264,7 @@ Kullanıcının mesajını veya sesini incele ve JSON döndür:
       }
     }
     return {
+      transcript: parsed.transcript,
       replyText:
         `👤 *Google Kişiler'e Başarıyla Kaydedildi!*\n\n` +
         `📇 *İsim:* ${cnt.name}\n` +
@@ -255,16 +276,45 @@ Kullanıcının mesajını veya sesini incele ve JSON döndür:
 
   if (parsed?.intent === "note" && parsed.note) {
     return {
+      transcript: parsed.transcript,
       replyText: `📝 *Not Defterine Kaydedildi!*\n\n"${parsed.note.content}"`,
     };
   }
 
   return {
+    transcript: parsed?.transcript || text || "",
     replyText: `📝 Mesajınız işlendi: "${parsed?.transcript || text || ""}"`,
   };
 }
 
+// ============================================================================
+// SINGLETON SOCKET & DEDUPLICATION STATE (PREVENTS DUPLICATE REPLIES)
+// ============================================================================
+let activeSock = null;
+let reconnectTimer = null;
+const processedMessageIds = new Set();
+const sentBotMessageIds = new Set();
+const recentCommandSignatures = new Map();
+const processedMediaSignatures = new Map();
+const inFlightJids = new Set();
+const lastCommandTimePerJid = new Map();
+const lastBotReplyTimePerJid = new Map();
+const BOT_INVISIBLE_MARKER = "\u200B";
+
 async function startWhatsAppBot() {
+  if (reconnectTimer) {
+    clearTimeout(reconnectTimer);
+    reconnectTimer = null;
+  }
+
+  if (activeSock) {
+    try {
+      activeSock.ev.removeAllListeners();
+      activeSock.ws?.close();
+    } catch {}
+    activeSock = null;
+  }
+
   writeQrHtmlPage("starting");
   const { state, saveCreds } = await useMultiFileAuthState(AUTH_DIR);
   const { version } = await fetchLatestBaileysVersion();
@@ -277,9 +327,12 @@ async function startWhatsAppBot() {
     browser: ["OBC WhatsApp Asistan", "Chrome", "1.0.0"],
   });
 
+  activeSock = sock;
+
   sock.ev.on("creds.update", saveCreds);
 
   sock.ev.on("connection.update", async (update) => {
+    if (sock !== activeSock) return;
     const { connection, lastDisconnect, qr } = update;
 
     if (qr) {
@@ -299,7 +352,8 @@ async function startWhatsAppBot() {
       const statusCode = lastDisconnect?.error?.output?.statusCode;
       const shouldReconnect = statusCode !== DisconnectReason.loggedOut;
       if (shouldReconnect) {
-        setTimeout(() => startWhatsAppBot(), 2000);
+        if (reconnectTimer) clearTimeout(reconnectTimer);
+        reconnectTimer = setTimeout(() => startWhatsAppBot(), 2500);
       } else {
         writeQrHtmlPage("starting");
       }
@@ -315,62 +369,98 @@ async function startWhatsAppBot() {
         return;
       }
       console.log(
-        `🚀 WhatsApp Asistanı (+${TARGET_ASSISTANT_PHONE}) CANLI! Telefonunuzdan veya web.whatsapp.com üzerinden komut gönderebilirsiniz.`
+        `🚀 WhatsApp Asistanı (+${TARGET_ASSISTANT_PHONE}) CANLI! Telefonunuzdan veya web.whatsapp.com üzerinden yazılı ve sesli komut gönderebilirsiniz.`
       );
       writeQrHtmlPage("connected");
     }
   });
 
   sock.ev.on("messages.upsert", async ({ messages, type }) => {
+    if (sock !== activeSock) return;
     if (type !== "notify") return;
 
     for (const m of messages) {
       if (!m.message) continue;
 
-      const jid = m.key.remoteJid;
-      if (!jid || jid === "status@broadcast") continue;
+      const msgId = m.key?.id;
+      if (!msgId) continue;
 
-      let text =
-        m.message.conversation ||
-        m.message.extendedTextMessage?.text ||
-        m.message.ephemeralMessage?.message?.extendedTextMessage?.text ||
-        m.message.ephemeralMessage?.message?.conversation ||
-        "";
-
-      if (
-        text.startsWith("📅 *Google Takvim") ||
-        text.startsWith("🔄 *Google Takvim") ||
-        text.startsWith("🗑️ *Google Takvim") ||
-        text.startsWith("📨 *Google Takvim") ||
-        text.startsWith("👤 *Google Kişiler") ||
-        text.startsWith("🔄 *Google Kişiler") ||
-        text.startsWith("🗑️ *Google Kişiler") ||
-        text.startsWith("⚠️ *Silinecek") ||
-        text.startsWith("📝 *Not Defterine") ||
-        text.startsWith("📝 Mesajınız işlendi") ||
-        text.startsWith("🎙️ *[Sesli Mesaj") ||
-        text.startsWith("Anlayamadım. Lütfen")
-      ) {
+      // 1. Skip messages sent by this bot or already processed
+      if (sentBotMessageIds.has(msgId) || processedMessageIds.has(msgId)) {
         continue;
       }
 
-      const lower = text.toLocaleLowerCase("tr-TR");
+      // 2. Skip old history sync messages (> 60s old)
+      const msgTs = Number(m.messageTimestamp || 0);
+      if (msgTs > 0 && Math.floor(Date.now() / 1000) - msgTs > 60) {
+        continue;
+      }
+
+      const jid = m.key.remoteJid;
+      if (!jid || jid === "status@broadcast") continue;
+
+      // Unwrap ephemeral / viewOnce containers so both text and voice notes work in all chats
+      const innerMsg =
+        m.message.ephemeralMessage?.message ||
+        m.message.viewOnceMessage?.message ||
+        m.message.viewOnceMessageV2?.message ||
+        m.message.documentWithCaptionMessage?.message ||
+        m.message;
+
+      let text =
+        innerMsg.conversation ||
+        innerMsg.extendedTextMessage?.text ||
+        m.message.conversation ||
+        m.message.extendedTextMessage?.text ||
+        "";
+
+      // 3. Skip any bot output message (invisible marker or bot prefixes) & record bot reply timestamp
+      const trimmedText = text.replace(/^\u200B+|\u200B+$/g, "").trim();
+      if (
+        text.includes(BOT_INVISIBLE_MARKER) ||
+        trimmedText.startsWith("🎙️") ||
+        trimmedText.startsWith("📅 *Google Takvim") ||
+        trimmedText.startsWith("🔄 *Google Takvim") ||
+        trimmedText.startsWith("🗑️ *Google Takvim") ||
+        trimmedText.startsWith("📨 *Google Takvim") ||
+        trimmedText.startsWith("👤 *Google Kişiler") ||
+        trimmedText.startsWith("🔄 *Google Kişiler") ||
+        trimmedText.startsWith("🗑️ *Google Kişiler") ||
+        trimmedText.startsWith("⚠️ *Silinecek") ||
+        trimmedText.startsWith("📝 *Not Defterine") ||
+        trimmedText.startsWith("📝 Mesajınız işlendi") ||
+        trimmedText.startsWith("Anlayamadım. Lütfen") ||
+        (trimmedText.includes("📌 *Başlık:*") && trimmedText.includes("🗓️ *Tarih:*"))
+      ) {
+        processedMessageIds.add(msgId);
+        lastBotReplyTimePerJid.set(jid, Date.now());
+        continue;
+      }
+
+      const audioMsg = innerMsg.audioMessage || m.message.audioMessage;
+      const lower = trimmedText.toLocaleLowerCase("tr-TR");
+      const hasClockTime = /\b([01]?\d|2[0-3])[:.][0-5]\d\b/.test(lower);
       const isCommand =
-        Boolean(m.message.audioMessage) ||
+        Boolean(audioMsg) ||
         lower.startsWith("!") ||
+        hasClockTime ||
         lower.includes("toplantı") ||
         lower.includes("toplanti") ||
         lower.includes("randevu") ||
         lower.includes("etkinlik") ||
         lower.includes("görev") ||
         lower.includes("gorev") ||
+        lower.includes("görüşme") ||
+        lower.includes("gorusme") ||
         lower.includes("takvim") ||
+        lower.includes("ajanda") ||
         lower.includes("rehber") ||
         lower.includes("kişi") ||
         lower.includes("kisi") ||
         lower.includes("numara") ||
         lower.includes("kaydet") ||
         lower.includes("ekle") ||
+        lower.includes("girer misin") ||
         lower.includes("gönder") ||
         lower.includes("gonder") ||
         lower.includes("davet") ||
@@ -384,65 +474,149 @@ async function startWhatsAppBot() {
         lower.includes("öne çek") ||
         lower.includes("one cek") ||
         lower.includes("ileri al") ||
+        lower.includes("ileriye al") ||
         lower.includes("sil") ||
         lower.includes("iptal") ||
         lower.includes("kaldır") ||
+        lower.includes("hatırlat") ||
         lower.includes("not al") ||
         lower.includes("not et");
 
       if (!isCommand) continue;
 
-      let audioBase64 = undefined;
-      let mimeType = undefined;
-      let isVoice = false;
-
-      if (m.message.audioMessage) {
-        isVoice = true;
-        try {
-          const buffer = await downloadMediaMessage(m, "buffer", {});
-          audioBase64 = buffer.toString("base64");
-          mimeType = m.message.audioMessage.mimetype || "audio/ogg";
-        } catch (err) {
-          console.error("Ses indirme hatası:", err.message);
-        }
+      processedMessageIds.add(msgId);
+      if (processedMessageIds.size > 500) {
+        const firstId = processedMessageIds.values().next().value;
+        processedMessageIds.delete(firstId);
       }
 
-      if (!text && !audioBase64) continue;
+      // 4. SYNCHRONOUS LOCK BEFORE AWAIT (prevents race condition when Baileys fires two upsert events for 1 voice note)
+      const nowPre = Date.now();
+      for (const [k, ts] of processedMediaSignatures.entries()) {
+        if (nowPre - ts > 25000) processedMediaSignatures.delete(k);
+      }
+      if (audioMsg) {
+        const rawSha = audioMsg.fileSha256
+          ? Buffer.from(audioMsg.fileSha256).toString("base64")
+          : "";
+        const rawMediaKey = audioMsg.mediaKey
+          ? Buffer.from(audioMsg.mediaKey).toString("base64")
+          : "";
+        const mediaLockKey = `media:${rawSha || rawMediaKey || audioMsg.fileLength || msgId}`;
+        if (
+          processedMediaSignatures.has(mediaLockKey) ||
+          inFlightJids.has(jid) ||
+          nowPre - (lastCommandTimePerJid.get(jid) || 0) < 8000
+        ) {
+          console.log(
+            "⏭️ Eşzamanlı çift sesli mesaj olayı indirme öncesinde engellendi:",
+            msgId
+          );
+          continue;
+        }
+        processedMediaSignatures.set(mediaLockKey, nowPre);
+      } else {
+        const textPreKey = `text:${lower}`;
+        if (
+          processedMediaSignatures.has(textPreKey) ||
+          inFlightJids.has(jid)
+        ) {
+          console.log(
+            "⏭️ Eşzamanlı çift yazılı komut olayı engellendi:",
+            msgId
+          );
+          continue;
+        }
+        processedMediaSignatures.set(textPreKey, nowPre);
+      }
+
+      inFlightJids.add(jid);
+      lastCommandTimePerJid.set(jid, nowPre);
 
       try {
-        console.log(`📩 Komut işleniyor (${jid}):`, text || "[Sesli Mesaj]");
+        // If running on Render Cloud while Local PC might also be online, wait 3.5s so Local PC has priority
+        if (process.env.RENDER) {
+          await new Promise((r) => setTimeout(r, 3500));
+          if ((lastBotReplyTimePerJid.get(jid) || 0) >= nowPre) {
+            console.log(
+              "⏭️ Yerel asistan zaten yanıt verdi, bulut kopyası tek yanıt için atlanıyor."
+            );
+            continue;
+          }
+        }
+
+        let audioBase64 = undefined;
+        let mimeType = undefined;
+        let isVoice = false;
+
+        if (audioMsg) {
+          isVoice = true;
+          try {
+            const buffer = await downloadMediaMessage(m, "buffer", {});
+            audioBase64 = buffer.toString("base64");
+            mimeType =
+              (audioMsg.mimetype || "audio/ogg").split(";")[0].trim() ||
+              "audio/ogg";
+          } catch (err) {
+            console.error("Ses indirme hatası:", err.message);
+          }
+        }
+
+        if (!trimmedText && !audioBase64) continue;
+
+        // 5. Content/Audio signature deduplication within 25 seconds
+        const nowMs = Date.now();
+        for (const [k, ts] of recentCommandSignatures.entries()) {
+          if (nowMs - ts > 25000) recentCommandSignatures.delete(k);
+        }
+        const cmdSig = isVoice
+          ? `voice:${audioBase64.slice(0, 160)}:${audioBase64.length}`
+          : `text:${lower}`;
+        if (recentCommandSignatures.has(cmdSig)) {
+          console.log(
+            "⏭️ Çift komut algılandı, tek yanıt için atlanıyor:",
+            msgId
+          );
+          continue;
+        }
+        recentCommandSignatures.set(cmdSig, nowMs);
+
+        console.log(
+          `📩 Komut işleniyor (${jid}):`,
+          trimmedText || `[Sesli Mesaj - ${mimeType}]`
+        );
         let result = null;
         try {
           const response = await axios.post(
             ASSISTANT_API_URL,
             {
-              text: text || undefined,
+              text: trimmedText || undefined,
               audioBase64,
               mimeType,
               isVoice,
               fromWhatsAppBot: true,
             },
-            { timeout: 12000 }
+            { timeout: 22000 }
           );
           result = response.data;
-        } catch {
+        } catch (localErr) {
+          // Only fallback to Vercel if local server is unreachable
           try {
             const vercelResponse = await axios.post(
               VERCEL_API_URL,
               {
-                text: text || undefined,
+                text: trimmedText || undefined,
                 audioBase64,
                 mimeType,
                 isVoice,
                 fromWhatsAppBot: true,
               },
-              { timeout: 15000 }
+              { timeout: 22000 }
             );
             result = vercelResponse.data;
           } catch {
-            // If both local and Vercel servers are unreachable, process directly via Gemini + Google APIs!
             result = await processStandaloneCloud({
-              text: text || undefined,
+              text: trimmedText || undefined,
               audioBase64,
               mimeType,
               isVoice,
@@ -450,30 +624,56 @@ async function startWhatsAppBot() {
           }
         }
 
-        if (result && result.replyText) {
-          const prefix = isVoice ? "🎙️ *[Sesli Mesaj Çözümlendi]*\n\n" : "";
-          await sock.sendMessage(jid, { text: prefix + result.replyText });
-          console.log("✅ Yanıt WhatsApp üzerinden gönderildi!");
+        if (result?.duplicate || !result?.replyText) {
+          console.log("⏭️ Mükerrer işlem/yanıt engellendi (tek kayıt garantisi).");
+          continue;
         }
+
+        let prefix = "";
+        if (isVoice && !result.replyText.startsWith("🎙️")) {
+          prefix = result.transcript
+            ? `🎙️ *[Sesli Mesaj Çözümlendi]* _"${result.transcript}"_\n\n`
+            : "🎙️ *[Sesli Mesaj Çözümlendi]*\n\n";
+        }
+        const finalMessage = prefix + result.replyText + BOT_INVISIBLE_MARKER;
+        const sentMsg = await sock.sendMessage(jid, { text: finalMessage });
+        lastBotReplyTimePerJid.set(jid, Date.now());
+        if (sentMsg?.key?.id) {
+          sentBotMessageIds.add(sentMsg.key.id);
+          processedMessageIds.add(sentMsg.key.id);
+        }
+        console.log("✅ Tekil yanıt WhatsApp üzerinden gönderildi!");
       } catch (err) {
         console.error("Asistan hatası:", err.message);
+      } finally {
+        inFlightJids.delete(jid);
       }
     }
   });
 }
 
-// Start lightweight HTTP server for Cloud Health Checks & QR Code viewing (Render / Railway / Koyeb)
+// Start lightweight HTTP server for Singleton Lock, Cloud Health Checks & QR Code viewing
 const CLOUD_PORT = Number(process.env.PORT || process.env.BOT_PORT || 3001);
-if (String(CLOUD_PORT) !== "3000" || process.env.RENDER || process.env.RAILWAY_ENVIRONMENT) {
-  http
-    .createServer((req, res) => {
-      res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
-      res.end(latestQrHtml || "WhatsApp Bot Çalışıyor");
-    })
-    .listen(CLOUD_PORT, "0.0.0.0", () => {
-      console.log(`🌐 QR & Health Sunucusu Port ${CLOUD_PORT} üzerinde aktif.`);
-    });
-}
+const healthServer = http.createServer((req, res) => {
+  res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
+  res.end(latestQrHtml || "WhatsApp Bot Çalışıyor");
+});
+
+healthServer.on("error", (err) => {
+  if (err.code === "EADDRINUSE") {
+    console.log(
+      `⚠️ Port ${CLOUD_PORT} üzerinde zaten aktif bir WhatsApp Asistan botu çalışıyor! Çift yanıtı önlemek için bu ikinci kopya kapatılıyor.`
+    );
+    process.exit(0);
+  }
+});
+
+healthServer.listen(CLOUD_PORT, "0.0.0.0", () => {
+  console.log(
+    `🌐 Tekil WhatsApp Bot & QR Sunucusu Port ${CLOUD_PORT} üzerinde aktif.`
+  );
+  startWhatsAppBot();
+});
 
 // Self-keepalive ping for Render 24/7 operation
 if (process.env.RENDER_EXTERNAL_URL) {
@@ -481,5 +681,3 @@ if (process.env.RENDER_EXTERNAL_URL) {
     axios.get(process.env.RENDER_EXTERNAL_URL).catch(() => {});
   }, 10 * 60 * 1000);
 }
-
-startWhatsAppBot();
