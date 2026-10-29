@@ -65,7 +65,10 @@ export async function POST(request: NextRequest) {
       return new Response("EVENT_RECEIVED", { status: 200 });
     }
 
-    const sender: string = msg.from;
+    const sender: string = String(msg.from || "");
+    if (sender.includes("905336330011") || sender.includes("5336330011")) {
+      return new Response("BLOCKED_OLD_NUMBER", { status: 200 });
+    }
     const whatsappToken = process.env.WHATSAPP_ACCESS_TOKEN;
     const phoneNumberId = process.env.WHATSAPP_PHONE_NUMBER_ID;
 

@@ -3,9 +3,10 @@ import Script from "next/script";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "WhatsApp ⇄ Google Workspace Asistanı (Sesli & Yazılı)",
+  title: "WhatsApp ⇄ Google Workspace Asistanı (+905491007729)",
   description:
-    "WhatsApp sesli ve yazılı mesajları Google Takvim, Google Kişiler ve Not Defteri ile senkronize eden yapay zeka destekli asistan.",
+    "WhatsApp sesli ve yazılı mesajları Google Takvim, Google Kişiler ve Not Defteri ile senkronize eden 7/24 bulut yapay zeka asistanı.",
+  manifest: "/manifest.json",
 };
 
 export default function RootLayout({

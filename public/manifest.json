@@ -1,0 +1,9 @@
+{
+  "name": "OBC WhatsApp & Google Asistanı (+905491007729)",
+  "short_name": "OBC Asistan",
+  "description": "7/24 Bulut Tabanlı WhatsApp & Google Takvim/Rehber Sesli ve Yazılı Asistanı",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#0f172a",
+  "theme_color": "#075E54"
+}

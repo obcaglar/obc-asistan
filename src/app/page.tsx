@@ -1342,15 +1342,15 @@ WHATSAPP_VERIFY_TOKEN=${waverify}`;
                   </div>
                   <div>
                     <h3 className="text-sm font-bold flex items-center gap-1.5">
-                      Google Workspace Asistanı
+                      Google Workspace Asistanı (+90 549 100 77 29)
                       <i
                         className="fa-solid fa-certificate text-teal-300 text-xs"
-                        title="Onaylı Bot"
+                        title="Onaylı 7/24 Bulut Bot"
                       ></i>
                     </h3>
                     <p className="text-[11px] text-teal-100 flex items-center gap-1">
-                      <span>çevrimiçi</span> •{" "}
-                      <span>Takvim / Kişiler / Notlar (Next.js API)</span>
+                      <span>7/24 Vercel Bulut Aktif</span> •{" "}
+                      <span>PC Kapalıyken Çalışır (Takvim &amp; Rehber)</span>
                     </p>
                   </div>
                 </div>
