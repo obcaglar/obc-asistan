@@ -255,6 +255,18 @@ Kullanıcının mesajını veya Türkçe ses kaydını incele ve JSON döndür:
 
   if (parsed?.intent === "contact" && parsed.contact) {
     const cnt = parsed.contact;
+    const trLower = String(parsed.transcript || text || "").toLocaleLowerCase("tr-TR");
+    if (
+      parsed.action === "delete" ||
+      parsed.action === "update" ||
+      /\b(sil|kaldır|kaldir|güncelle|guncelle|değiştir|degistir|düzenle|duzenle)\b/i.test(trLower)
+    ) {
+      return {
+        transcript: parsed.transcript,
+        duplicate: true,
+        replyText: "",
+      };
+    }
     let synced = false;
     if (accessToken) {
       try {
@@ -550,9 +562,9 @@ async function startWhatsAppBot() {
       lastCommandTimePerJid.set(jid, nowPre);
 
       try {
-        // If running on Render Cloud while Local PC might also be online, wait 3.5s so Local PC has priority
+        // If running on Render Cloud while Local PC might also be online, wait 12s so Local PC has priority on voice notes
         if (process.env.RENDER) {
-          await new Promise((r) => setTimeout(r, 3500));
+          await new Promise((r) => setTimeout(r, 12000));
           if ((lastBotReplyTimePerJid.get(jid) || 0) >= nowPre) {
             console.log(
               "⏭️ Yerel asistan zaten yanıt verdi, bulut kopyası tek yanıt için atlanıyor."

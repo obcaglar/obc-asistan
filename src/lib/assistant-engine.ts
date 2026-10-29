@@ -330,45 +330,15 @@ export function parseCommandLocally(
     lower.startsWith("!görev sil") ||
     lower.startsWith("!randevu sil");
 
-  const hasCreateVerb =
-    /\b(ekle\w*|oluştur\w*|olustur\w*|ayarla\w*|planla\w*|gir\b|girip\b|girer\s*misin\w*|girermisin\w*|girelim\b|girmesini\b|girmek\b|kaydet\w*|kaydedip\b|koy\w*|yaz\w*|aç\b|ac\b)\b/i.test(
-      lower
-    );
-
-  const isShare =
-    !isDelete &&
-    !hasCreateVerb &&
-    (lower.startsWith("!toplanti gönder") ||
-      lower.startsWith("!toplanti gonder") ||
-      lower.startsWith("!toplantı gönder") ||
-      lower.startsWith("!toplantı gonder") ||
-      lower.startsWith("!toplanti davet") ||
-      lower.startsWith("!toplantı davet") ||
-      lower.startsWith("!toplanti paylaş") ||
-      lower.startsWith("!toplantı paylaş") ||
-      lower.startsWith("!gorev gönder") ||
-      lower.startsWith("!gorev gonder") ||
-      lower.startsWith("!görev gönder") ||
-      lower.startsWith("!görev gonder") ||
-      lower.startsWith("!takvim gönder") ||
-      lower.startsWith("!takvim gonder") ||
-      lower.startsWith("!takvim paylaş") ||
-      lower.startsWith("!etkinlik gönder") ||
-      lower.startsWith("!etkinlik gonder") ||
-      /\b(gönder\w*|gonder\w*|davet\s*et\w*|davetiye\s*gönder\w*|paylaş\w*|paylas\w*|mail\s*at\w*|epostaya\s*gönder\w*|e-postaya\s*gönder\w*)\b/i.test(
-        lower
-      ));
-
   const isUpdate =
     !isDelete &&
-    !hasCreateVerb &&
-    !isShare &&
     (lower.includes("güncelle") ||
       lower.includes("guncelle") ||
       lower.includes("değiştir") ||
       lower.includes("degistir") ||
       lower.includes("düzenle") ||
       lower.includes("duzenle") ||
+      lower.includes("yenile") ||
       lower.includes("ertele") ||
       lower.includes("taşı") ||
       lower.includes("tasi") ||
@@ -391,6 +361,38 @@ export function parseCommandLocally(
       lower.startsWith("!gorev güncelle") ||
       lower.startsWith("!görev güncelle") ||
       lower.startsWith("!randevu güncelle"));
+
+  const hasCreateVerb =
+    !isDelete &&
+    !isUpdate &&
+    /\b(ekle\w*|oluştur\w*|olustur\w*|ayarla\w*|planla\w*|gir\b|girip\b|girer\s*misin\w*|girermisin\w*|girelim\b|girmesini\b|girmek\b|kaydet\w*|kaydedip\b|koy\w*|yaz\w*|aç\b|ac\b)\b/i.test(
+      lower
+    );
+
+  const isShare =
+    !isDelete &&
+    !isUpdate &&
+    !hasCreateVerb &&
+    (lower.startsWith("!toplanti gönder") ||
+      lower.startsWith("!toplanti gonder") ||
+      lower.startsWith("!toplantı gönder") ||
+      lower.startsWith("!toplantı gonder") ||
+      lower.startsWith("!toplanti davet") ||
+      lower.startsWith("!toplantı davet") ||
+      lower.startsWith("!toplanti paylaş") ||
+      lower.startsWith("!toplantı paylaş") ||
+      lower.startsWith("!gorev gönder") ||
+      lower.startsWith("!gorev gonder") ||
+      lower.startsWith("!görev gönder") ||
+      lower.startsWith("!görev gonder") ||
+      lower.startsWith("!takvim gönder") ||
+      lower.startsWith("!takvim gonder") ||
+      lower.startsWith("!takvim paylaş") ||
+      lower.startsWith("!etkinlik gönder") ||
+      lower.startsWith("!etkinlik gonder") ||
+      /\b(gönder\w*|gonder\w*|davet\s*et\w*|davetiye\s*gönder\w*|paylaş\w*|paylas\w*|mail\s*at\w*|epostaya\s*gönder\w*|e-postaya\s*gönder\w*)\b/i.test(
+        lower
+      ));
 
   const action: ActionType = isDelete
     ? "delete"
@@ -1674,21 +1676,22 @@ async function deleteGoogleCalendarEvent(
 // Cache recently created/updated resourceNames for instant 0-latency lookup
 const recentContactsResourceMap = new Map<string, string>();
 
-async function findGooglePersonContact(
+async function findAllMatchingGooglePersonContacts(
   accessToken: string,
   query: string
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-): Promise<any | null> {
+): Promise<any[]> {
   try {
-    const qLower = query.trim().toLocaleLowerCase("tr-TR");
+    const qNorm = normalizeTr(query);
     const qDigits = query.replace(/\D/g, "");
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const results: any[] = [];
+    const seenResourceNames = new Set<string>();
 
-    // 1. Check in-memory recent resourceName map first (handles 0ms immediate updates/deletes)
+    // 1. Check in-memory recent resourceName map first
     for (const [cachedName, resourceName] of recentContactsResourceMap.entries()) {
-      if (
-        cachedName.includes(qLower) ||
-        qLower.includes(cachedName)
-      ) {
+      const cNorm = normalizeTr(cachedName);
+      if (cNorm && qNorm && (cNorm === qNorm || cNorm.includes(qNorm) || qNorm.includes(cNorm))) {
         const directRes = await fetch(
           `https://people.googleapis.com/v1/${resourceName}?personFields=names,phoneNumbers,emailAddresses,organizations,biographies,metadata`,
           {
@@ -1699,7 +1702,8 @@ async function findGooglePersonContact(
         if (directRes.ok) {
           const directPerson = await directRes.json();
           if (directPerson && directPerson.resourceName) {
-            return directPerson;
+            results.push(directPerson);
+            seenResourceNames.add(directPerson.resourceName);
           }
         }
       }
@@ -1718,49 +1722,71 @@ async function findGooglePersonContact(
       const connections = Array.isArray(data.connections) ? data.connections : [];
 
       for (const person of connections) {
-        const displayName = String(
-          person.names?.[0]?.displayName || ""
-        ).toLocaleLowerCase("tr-TR");
-        const givenName = String(
-          person.names?.[0]?.givenName || ""
-        ).toLocaleLowerCase("tr-TR");
+        if (!person?.resourceName || seenResourceNames.has(person.resourceName)) {
+          continue;
+        }
+        const displayNameNorm = normalizeTr(
+          String(person.names?.[0]?.displayName || "")
+        );
+        const givenNameNorm = normalizeTr(
+          String(person.names?.[0]?.givenName || "")
+        );
         const phoneVal = String(person.phoneNumbers?.[0]?.value || "").replace(
           /\D/g,
           ""
         );
 
         if (
-          (qLower &&
-            (displayName.includes(qLower) ||
-              qLower.includes(displayName) ||
-              givenName.includes(qLower))) ||
+          (qNorm &&
+            displayNameNorm &&
+            (displayNameNorm === qNorm ||
+              displayNameNorm.includes(qNorm) ||
+              qNorm.includes(displayNameNorm) ||
+              (givenNameNorm && givenNameNorm.includes(qNorm)))) ||
           (qDigits.length >= 7 && phoneVal.includes(qDigits))
         ) {
-          return person;
+          results.push(person);
+          seenResourceNames.add(person.resourceName);
         }
       }
     }
 
-    // 3. Fallback: People API searchContacts endpoint
-    const searchRes = await fetch(
-      `https://people.googleapis.com/v1/people:searchContacts?query=${encodeURIComponent(query.trim())}&readMask=names,phoneNumbers,emailAddresses,organizations,biographies,metadata`,
-      {
-        cache: "no-store",
-        headers: { Authorization: `Bearer ${accessToken}` },
-      }
-    );
-    if (searchRes.ok) {
-      const searchData = await searchRes.json();
-      const firstMatch = searchData?.results?.[0]?.person;
-      if (firstMatch && firstMatch.resourceName) {
-        return firstMatch;
+    // 3. Fallback: People API searchContacts endpoint if none found
+    if (results.length === 0) {
+      const searchRes = await fetch(
+        `https://people.googleapis.com/v1/people:searchContacts?query=${encodeURIComponent(query.trim())}&readMask=names,phoneNumbers,emailAddresses,organizations,biographies,metadata`,
+        {
+          cache: "no-store",
+          headers: { Authorization: `Bearer ${accessToken}` },
+        }
+      );
+      if (searchRes.ok) {
+        const searchData = await searchRes.json();
+        const searchItems = Array.isArray(searchData?.results)
+          ? searchData.results
+          : [];
+        for (const sr of searchItems) {
+          if (sr?.person?.resourceName && !seenResourceNames.has(sr.person.resourceName)) {
+            results.push(sr.person);
+            seenResourceNames.add(sr.person.resourceName);
+          }
+        }
       }
     }
 
-    return null;
+    return results;
   } catch {
-    return null;
+    return [];
   }
+}
+
+async function findGooglePersonContact(
+  accessToken: string,
+  query: string
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+): Promise<any | null> {
+  const all = await findAllMatchingGooglePersonContacts(accessToken, query);
+  return all.length > 0 ? all[0] : null;
 }
 
 async function createGooglePersonContact(
@@ -1772,8 +1798,56 @@ async function createGooglePersonContact(
     company: string;
     notes: string;
   }
-): Promise<{ ok: boolean; error?: string }> {
+): Promise<{ ok: boolean; duplicate?: boolean; error?: string }> {
   try {
+    if (isBotReplyEcho(cnt.name) || isBotReplyEcho(cnt.company)) {
+      return { ok: false, duplicate: true, error: "Bot mesajı atlandı" };
+    }
+
+    const cleanCompany = isBotReplyEcho(cnt.company)
+      ? "WhatsApp Bağlantısı"
+      : cnt.company;
+    const normTargetName = normalizeTr(cnt.name);
+    const newDigits = (cnt.phone || "").replace(/\D/g, "");
+
+    // 1. Distributed Deduplication & Upsert Check via Google People API
+    const existingMatches = await findAllMatchingGooglePersonContacts(
+      accessToken,
+      cnt.name
+    );
+    const exactNameMatches = existingMatches.filter(
+      (p) => normalizeTr(String(p.names?.[0]?.displayName || "")) === normTargetName
+    );
+
+    if (exactNameMatches.length > 0) {
+      const primary = exactNameMatches[0];
+      const existingDigits = String(primary.phoneNumbers?.[0]?.value || "").replace(
+        /\D/g,
+        ""
+      );
+      const existingEmail = String(
+        primary.emailAddresses?.[0]?.value || ""
+      ).toLowerCase();
+      const updateTimeStr = primary.metadata?.sources?.[0]?.updateTime;
+      const updatedMs = updateTimeStr ? new Date(updateTimeStr).getTime() : 0;
+      const nowMs = Date.now();
+
+      // If created/modified in the last 90s with same name & phone (or by parallel bot instance), suppress duplicate!
+      if (
+        (updatedMs > 0 && nowMs - updatedMs < 90000 && (!newDigits || existingDigits === newDigits)) ||
+        (newDigits && existingDigits === newDigits && (!cnt.email || existingEmail === cnt.email.toLowerCase()))
+      ) {
+        return { ok: true, duplicate: true };
+      }
+
+      // Otherwise, update the existing contact in-place instead of creating a duplicate contact!
+      const updRes = await updateGooglePersonContact(accessToken, cnt.name, {
+        ...cnt,
+        company: cleanCompany,
+      });
+      return { ok: updRes.ok, duplicate: updRes.duplicate, error: updRes.error };
+    }
+
     const nameParts = cnt.name.trim().split(/\s+/);
     const givenName =
       nameParts.length > 1
@@ -1797,7 +1871,7 @@ async function createGooglePersonContact(
           emailAddresses: cnt.email
             ? [{ value: cnt.email, type: "work" }]
             : [],
-          organizations: cnt.company ? [{ name: cnt.company }] : [],
+          organizations: cleanCompany ? [{ name: cleanCompany }] : [],
           biographies: cnt.notes ? [{ value: cnt.notes }] : [],
         }),
       }
@@ -1838,12 +1912,19 @@ async function updateGooglePersonContact(
     company: string;
     notes: string;
   }
-): Promise<{ ok: boolean; matchedName?: string; error?: string }> {
+): Promise<{
+  ok: boolean;
+  duplicate?: boolean;
+  matchedName?: string;
+  removedDuplicates?: number;
+  error?: string;
+}> {
   try {
-    const existing = await findGooglePersonContact(
+    const allMatches = await findAllMatchingGooglePersonContacts(
       accessToken,
       targetQuery || cnt.name
     );
+    const existing = allMatches[0];
     if (!existing || !existing.resourceName) {
       return {
         ok: false,
@@ -1869,9 +1950,60 @@ async function updateGooglePersonContact(
         : existing.phoneNumbers?.[0]?.value || "";
     const finalEmail = cnt.email || existing.emailAddresses?.[0]?.value || "";
     const finalCompany =
-      cnt.company && cnt.company !== "WhatsApp Bağlantısı"
+      cnt.company &&
+      cnt.company !== "WhatsApp Bağlantısı" &&
+      !isBotReplyEcho(cnt.company)
         ? cnt.company
         : existing.organizations?.[0]?.name || "";
+
+    // Distributed deduplication check: if primary contact was already updated in the last 60s with the exact same phone & email
+    const existingDigits = String(existing.phoneNumbers?.[0]?.value || "").replace(
+      /\D/g,
+      ""
+    );
+    const finalDigits = finalPhone.replace(/\D/g, "");
+    const existingEmail = String(
+      existing.emailAddresses?.[0]?.value || ""
+    ).toLowerCase();
+    const updateTimeStr = existing.metadata?.sources?.[0]?.updateTime;
+    const updatedMs = updateTimeStr ? new Date(updateTimeStr).getTime() : 0;
+
+    // Also clean up any duplicate contacts with the same normalized name in Google Contacts!
+    const normFinalName = normalizeTr(finalName);
+    let removedDuplicates = 0;
+    for (let i = 1; i < allMatches.length; i++) {
+      const dup = allMatches[i];
+      const dupNameNorm = normalizeTr(String(dup.names?.[0]?.displayName || ""));
+      if (dup?.resourceName && dupNameNorm === normFinalName) {
+        try {
+          await fetch(
+            `https://people.googleapis.com/v1/${dup.resourceName}:deleteContact`,
+            {
+              method: "DELETE",
+              cache: "no-store",
+              headers: { Authorization: `Bearer ${accessToken}` },
+            }
+          );
+          removedDuplicates++;
+        } catch {
+          // Ignore duplicate deletion error
+        }
+      }
+    }
+
+    if (
+      updatedMs > 0 &&
+      Date.now() - updatedMs < 60000 &&
+      existingDigits === finalDigits &&
+      existingEmail === finalEmail.toLowerCase() &&
+      removedDuplicates === 0
+    ) {
+      return {
+        ok: true,
+        duplicate: true,
+        matchedName: existing.names?.[0]?.displayName || finalName,
+      };
+    }
 
     const res = await fetch(
       `https://people.googleapis.com/v1/${existing.resourceName}:updateContact?updatePersonFields=names,phoneNumbers,emailAddresses,organizations,biographies&personFields=names,phoneNumbers,emailAddresses,organizations,biographies`,
@@ -1908,6 +2040,7 @@ async function updateGooglePersonContact(
     return {
       ok: true,
       matchedName: existing.names?.[0]?.displayName || finalName,
+      removedDuplicates,
     };
   } catch (err) {
     return {
@@ -1922,7 +2055,11 @@ async function deleteGooglePersonContact(
   targetQuery: string
 ): Promise<{ ok: boolean; deletedName?: string; error?: string }> {
   try {
-    const existing = await findGooglePersonContact(accessToken, targetQuery);
+    const allMatches = await findAllMatchingGooglePersonContacts(
+      accessToken,
+      targetQuery
+    );
+    const existing = allMatches[0];
     if (!existing || !existing.resourceName) {
       return {
         ok: false,
@@ -1930,22 +2067,38 @@ async function deleteGooglePersonContact(
       };
     }
 
-    const res = await fetch(
-      `https://people.googleapis.com/v1/${existing.resourceName}:deleteContact`,
-      {
-        method: "DELETE",
-        cache: "no-store",
-        headers: { Authorization: `Bearer ${accessToken}` },
-      }
+    const normTarget = normalizeTr(
+      String(existing.names?.[0]?.displayName || targetQuery)
     );
+    let deletedAny = false;
+    let lastStatus = 200;
 
-    if (!res.ok) {
-      const rawText = await res.text();
+    for (const item of allMatches) {
+      const itemNorm = normalizeTr(String(item.names?.[0]?.displayName || ""));
+      if (item?.resourceName && (item === existing || itemNorm === normTarget)) {
+        const res = await fetch(
+          `https://people.googleapis.com/v1/${item.resourceName}:deleteContact`,
+          {
+            method: "DELETE",
+            cache: "no-store",
+            headers: { Authorization: `Bearer ${accessToken}` },
+          }
+        );
+        lastStatus = res.status;
+        if (res.ok) deletedAny = true;
+      }
+    }
+
+    if (!deletedAny) {
       return {
         ok: false,
-        error: `HTTP ${res.status}: ${rawText.slice(0, 200)}`,
+        error: `HTTP ${lastStatus}: Kişi silinemedi`,
       };
     }
+
+    recentContactsResourceMap.delete(
+      targetQuery.trim().toLocaleLowerCase("tr-TR")
+    );
 
     return {
       ok: true,
@@ -2091,24 +2244,32 @@ export async function processAssistantInput(params: {
     parsed = localParsed;
   }
 
-  // Hard guard: if user's transcript explicitly asks to delete/cancel, never allow "create"
+  // Hard guard: priority order is delete > update > create
   const normTranscriptForAction = normalizeTr(transcript);
   const hasExplicitDeleteWord =
     /\b(sil|siler|silin|iptal|kaldir|cikar)\b/.test(normTranscriptForAction);
+  const hasExplicitUpdateWord =
+    !hasExplicitDeleteWord &&
+    (Boolean(localParsed.shiftMinutes) ||
+      /\b(guncelle\w*|degistir\w*|duzenle\w*|yenile\w*|one\s*cek\w*|ileri\w*\s*al\w*|ertele\w*)\b/.test(
+        normTranscriptForAction
+      ));
   const hasExplicitCreateWord =
     !hasExplicitDeleteWord &&
-    !localParsed.shiftMinutes &&
+    !hasExplicitUpdateWord &&
     /\b(ekle\w*|olustur\w*|ayarla\w*|planla\w*|gir\b|girip\b|girer\s*misin\w*|girermisin\w*|girelim\b|girmesini\b|kaydet\w*|kaydedip\b)\b/.test(
       normTranscriptForAction
     );
 
   let action: ActionType = hasExplicitDeleteWord
     ? "delete"
-    : hasExplicitCreateWord
-      ? "create"
-      : localParsed.action !== "create"
-        ? localParsed.action
-        : parsed.action || "create";
+    : hasExplicitUpdateWord
+      ? "update"
+      : hasExplicitCreateWord
+        ? "create"
+        : localParsed.action !== "create"
+          ? localParsed.action
+          : parsed.action || "create";
   const rawTargetQuery =
     parsed.targetQuery ||
     localParsed.targetQuery ||
@@ -2473,6 +2634,9 @@ export async function processAssistantInput(params: {
       }
 
       const replyText =
+        (isVoice
+          ? `🎙️ *Sesli Komut Algılandı:* _"${transcript}"_\n\n`
+          : "") +
         `🗑️ *Google Kişiler'den Silindi!*\n\n` +
         `👤 *Silinen Kişi:* ${deletedName}` +
         (syncedToGoogle
@@ -2495,14 +2659,27 @@ export async function processAssistantInput(params: {
 
     if (action === "update") {
       let matchedName = targetQuery || cntData.name;
+      let removedDuplicates = 0;
       if (accessToken) {
         const updRes = await updateGooglePersonContact(
           accessToken,
           matchedName,
           cntData
         );
+        if (updRes.duplicate) {
+          return {
+            transcript,
+            intent: "contact",
+            action: "update",
+            replyText: "",
+            usedGemini,
+            syncedToGoogle: true,
+            duplicate: true,
+          };
+        }
         syncedToGoogle = updRes.ok;
         if (updRes.matchedName) matchedName = updRes.matchedName;
+        if (updRes.removedDuplicates) removedDuplicates = updRes.removedDuplicates;
         googleSyncError = updRes.error;
       }
 
@@ -2518,12 +2695,18 @@ export async function processAssistantInput(params: {
       };
 
       const replyText =
+        (isVoice
+          ? `🎙️ *Sesli Komut Algılandı:* _"${transcript}"_\n\n`
+          : "") +
         `🔄 *Google Kişiler Kaydı Güncellendi!*\n\n` +
         `📇 *İsim:* ${contact.name}\n` +
         (cntData.phone ? `📞 *Yeni Telefon:* ${cntData.phone}\n` : "") +
         (cntData.email ? `✉️ *Yeni E-posta:* ${cntData.email}\n` : "") +
         (cntData.company && cntData.company !== "WhatsApp Bağlantısı"
           ? `🏢 *Yeni Şirket:* ${cntData.company}\n`
+          : "") +
+        (removedDuplicates > 0
+          ? `🧹 _Rehberdeki ${removedDuplicates} adet mükerrer kopya otomatik temizlendi._\n`
           : "") +
         (syncedToGoogle
           ? `✅ *Gerçek Google Kişiler (Contacts) hesabınızda güncellendi!*`
@@ -2560,6 +2743,17 @@ export async function processAssistantInput(params: {
 
     if (accessToken) {
       const cntRes = await createGooglePersonContact(accessToken, cntData);
+      if (cntRes.duplicate) {
+        return {
+          transcript,
+          intent: "contact",
+          action: "create",
+          replyText: "",
+          usedGemini,
+          syncedToGoogle: true,
+          duplicate: true,
+        };
+      }
       syncedToGoogle = cntRes.ok;
       googleSyncError = cntRes.error;
     }
@@ -2584,6 +2778,9 @@ export async function processAssistantInput(params: {
       : "";
 
     const replyText =
+      (isVoice
+        ? `🎙️ *Sesli Komut Algılandı:* _"${transcript}"_\n\n`
+        : "") +
       `👤 *Google Kişiler'e Başarıyla Kaydedildi!*\n\n` +
       `📇 *İsim:* ${contact.name}\n` +
       `📞 *Telefon:* ${contact.phone}\n` +
