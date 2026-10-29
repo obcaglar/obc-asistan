@@ -438,9 +438,14 @@ export default function HomePage() {
         meta = {
           type: "note",
           id: result.note.id,
+          syncedToGoogle: result.syncedToGoogle,
           usedGemini: result.usedGemini,
         };
-        showToast("📝 Not başarıyla kaydedildi!");
+        showToast(
+          result.syncedToGoogle
+            ? "📋 Görev & İş Ataması Google Tasks ve Takvim'e kaydedildi!"
+            : "📝 Not başarıyla kaydedildi!"
+        );
       }
 
       const now = new Date().toLocaleTimeString("tr-TR", {
