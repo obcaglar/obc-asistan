@@ -1282,8 +1282,13 @@ async function resolveRecipientEmails(
     if (contactEmails.length > 0) {
       const prefersGmail = /gmail/i.test(`${rawEmailStr || ""} ${recipientQuery || ""}`);
       const gmailMatch = contactEmails.find((e) => e.includes("@gmail.com"));
-      const chosenEmail = prefersGmail && gmailMatch ? gmailMatch : contactEmails[0];
-      emailList.push(chosenEmail);
+      if (prefersGmail && gmailMatch) {
+        emailList.push(gmailMatch);
+      } else {
+        for (const ce of contactEmails) {
+          if (!emailList.includes(ce)) emailList.push(ce);
+        }
+      }
       resolvedContactName =
         contactPerson?.names?.[0]?.displayName || cleanRecipientQuery;
       return { emails: emailList, resolvedContactName };
@@ -2200,10 +2205,27 @@ async function createGoogleTaskAndAssignment(
     recipientQuery
   );
 
+  const now = getIstanbulNow();
   const parsedDate = parseDateAndTimeFromTurkishText(rawTranscript);
-  const dueDateStr = parsedDate.dateStr || formatIsoDate(getIstanbulNow());
-  const startTime = parsedDate.hasExplicitTime ? parsedDate.startTime : "10:00";
-  const endTime = parsedDate.hasExplicitTime ? parsedDate.endTime : "10:30";
+  const dueDateStr = parsedDate.hasExplicitDate
+    ? parsedDate.dateStr
+    : formatIsoDate(now);
+
+  const slotStart = new Date(now.getTime() + 15 * 60000);
+  const slotEnd = new Date(slotStart.getTime() + 30 * 60000);
+  const defaultTodayStart = `${String(slotStart.getHours()).padStart(2, "0")}:${String(slotStart.getMinutes()).padStart(2, "0")}`;
+  const defaultTodayEnd = `${String(slotEnd.getHours()).padStart(2, "0")}:${String(slotEnd.getMinutes()).padStart(2, "0")}`;
+
+  const startTime = parsedDate.hasExplicitTime
+    ? parsedDate.startTime
+    : parsedDate.hasExplicitDate
+      ? "10:00"
+      : defaultTodayStart;
+  const endTime = parsedDate.hasExplicitTime
+    ? parsedDate.endTime
+    : parsedDate.hasExplicitDate
+      ? "10:30"
+      : defaultTodayEnd;
 
   let syncedToTasks = false;
   let tasksScopeMissing = false;
@@ -3064,7 +3086,10 @@ export async function processAssistantInput(params: {
     const syncStatusLine = taskSyncRes.syncedToTasks
       ? `\n✅ *Google Tasks (Görevler) ve Takvim uygulamanıza senkronize edildi!*`
       : taskSyncRes.syncedToCalendar
-        ? `\n✅ *Google Takvim / Görevler hesabınıza senkronize edildi!*`
+        ? `\n✅ *Google Takvim'e eklendi ve atanan kişiye e-posta gönderildi!*` +
+          (taskSyncRes.tasksScopeMissing
+            ? `\n🔑 *Google Tasks Uygulaması İçin 1 Kez İzin Onayı Gerekiyor:* Ayrı Google Tasks listesine de yazılabilmesi için tarayıcıdan şu linke 1 kez tıklayıp onay verin: http://localhost:3000/api/auth/google`
+            : "")
         : "";
 
     const replyText =

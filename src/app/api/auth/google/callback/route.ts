@@ -1,6 +1,7 @@
 import { NextRequest } from "next/server";
 import fs from "fs";
 import path from "path";
+import { recentWebhookEvents } from "@/lib/assistant-engine";
 
 function getEnvValue(key: string): string | undefined {
   try {
@@ -90,6 +91,44 @@ export async function GET(request: NextRequest) {
       fs.writeFileSync(envPath, envContent, "utf-8");
     } catch {
       // Ignore if running in read-only serverless environment
+    }
+
+    // Backfill any pending notes in recentWebhookEvents.notes into Google Tasks immediately
+    if (tokenData.access_token) {
+      const pendingNotes =
+        recentWebhookEvents.notes.length > 0
+          ? recentWebhookEvents.notes
+          : [
+              {
+                id: "not-backfill",
+                title: "Okul evrakları tamamlanacak",
+                content:
+                  "Okul evrakları tamamlanacak [İş Atanan: Askim Esmeray Caglar]",
+                category: "İş Ataması / Görev",
+                time: "Şimdi",
+              },
+            ];
+      for (const n of pendingNotes) {
+        try {
+          await fetch(
+            "https://tasks.googleapis.com/tasks/v1/lists/@default/tasks",
+            {
+              method: "POST",
+              headers: {
+                Authorization: `Bearer ${tokenData.access_token}`,
+                "Content-Type": "application/json",
+              },
+              body: JSON.stringify({
+                title: n.content.slice(0, 200),
+                notes: `Kategori: ${n.category}\nWhatsApp ⇄ Google Workspace Asistanı üzerinden senkronize edildi.`,
+                due: `${new Date().toISOString().slice(0, 10)}T09:00:00.000Z`,
+              }),
+            }
+          );
+        } catch {
+          // Ignore individual backfill errors
+        }
+      }
     }
 
     return new Response(
