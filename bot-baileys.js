@@ -22,17 +22,21 @@ const ASSISTANT_API_URL =
   process.env.ASSISTANT_API_URL || "http://localhost:3000/api/assistant";
 const VERCEL_API_URL =
   process.env.VERCEL_API_URL || "https://obc-asistan.vercel.app/api/assistant";
+const TARGET_ASSISTANT_PHONE = (
+  process.env.WHATSAPP_ASSISTANT_NUMBER || "+905491007729"
+).replace(/\D/g, "");
+const AUTH_DIR = `auth_info_baileys_${TARGET_ASSISTANT_PHONE}`;
 
 let latestQrHtml = "";
 
-function buildQrHtml(status, qrDataUrl = null) {
+function buildQrHtml(status, qrDataUrl = null, pairingCode = null) {
   return `<!DOCTYPE html>
 <html lang="tr">
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   ${status !== "connected" ? '<meta http-equiv="refresh" content="3" />' : ""}
-  <title>WhatsApp 7/24 QR Bağlantısı - OBC Asistan</title>
+  <title>WhatsApp 7/24 QR Bağlantısı (+${TARGET_ASSISTANT_PHONE}) - OBC Asistan</title>
   <script src="https://cdn.tailwindcss.com"></script>
 </head>
 <body class="min-h-screen bg-slate-950 text-white flex items-center justify-center p-4 font-sans">
@@ -47,22 +51,25 @@ function buildQrHtml(status, qrDataUrl = null) {
       }"></span>
       ${
         status === "connected"
-          ? "7/24 WhatsApp & Google Bağlantısı Aktif!"
+          ? `7/24 WhatsApp (+${TARGET_ASSISTANT_PHONE}) & Google Aktif!`
           : status === "qr"
-            ? "QR Kod Hazır — Telefonunuzla Taratın"
+            ? `+${TARGET_ASSISTANT_PHONE} Numaralı Telefonunuzla Taratın`
             : "WhatsApp QR Kodu Hazırlanıyor..."
       }
     </div>
 
     <h1 class="text-xl font-bold">WhatsApp ⇄ Google Workspace Asistanı</h1>
+    <div class="text-xs font-mono bg-slate-950 border border-emerald-500/30 text-emerald-300 py-1.5 px-3 rounded-xl inline-block">
+      Hedef Asistan Numarası: +${TARGET_ASSISTANT_PHONE}
+    </div>
 
     ${
       status === "connected"
         ? `<div class="p-6 bg-emerald-950/40 border border-emerald-500/40 rounded-2xl space-y-3">
              <div class="text-4xl">✅</div>
-             <p class="text-sm font-semibold text-emerald-300">Telefonunuz & Google Hesabınız Canlı Bağlı!</p>
+             <p class="text-sm font-semibold text-emerald-300">+${TARGET_ASSISTANT_PHONE} Numaralı WhatsApp & Google Hesabınız Canlı Bağlı!</p>
              <p class="text-xs text-slate-300 leading-relaxed">
-               Artık telefonunuzdan veya <b>web.whatsapp.com</b> üzerinden <b>"Kendime Mesaj (Siz)"</b> sohbetine:<br/><br/>
+               Artık <b>+${TARGET_ASSISTANT_PHONE}</b> numaralı WhatsApp hattınıza veya <b>"Kendime Mesaj (Siz)"</b> sohbetine:<br/><br/>
                • <code class="text-emerald-300">!toplanti Yarın 14:30 Bütçe Toplantısı</code><br/>
                • <code class="text-emerald-300">!rehber Ali Yılmaz 05321112233</code><br/>
                • <code class="text-emerald-300">!not Sunucu yedeklerini kontrol et</code><br/>
@@ -73,8 +80,16 @@ function buildQrHtml(status, qrDataUrl = null) {
           ? `<div class="bg-white p-4 rounded-2xl inline-block shadow-lg">
                <img src="${qrDataUrl}" alt="WhatsApp QR Code" class="w-64 h-64 mx-auto" />
              </div>
+             ${
+               pairingCode
+                 ? `<div class="bg-emerald-950/50 border border-emerald-500/40 rounded-2xl p-3 space-y-1">
+                      <div class="text-[11px] text-emerald-300 font-semibold">Veya Telefon Numarasıyla Bağlama Kodu (+${TARGET_ASSISTANT_PHONE}):</div>
+                      <div class="text-2xl font-mono font-bold tracking-widest text-white">${pairingCode}</div>
+                    </div>`
+                 : ""
+             }
              <ol class="text-xs text-slate-300 text-left space-y-1.5 bg-slate-950 p-4 rounded-2xl border border-slate-800 list-decimal list-inside">
-               <li>Telefonunuzda <b>WhatsApp</b> uygulamasını açın.</li>
+               <li><b>+${TARGET_ASSISTANT_PHONE}</b> numaralı telefonunuzda <b>WhatsApp</b> uygulamasını açın.</li>
                <li><b>Ayarlar</b> &gt; <b>Bağlı Cihazlar</b> menüsüne girin.</li>
                <li><b>Cihaz Bağla</b> butonuna basıp yukarıdaki QR kodu okutun.</li>
              </ol>`
@@ -85,8 +100,8 @@ function buildQrHtml(status, qrDataUrl = null) {
 </html>`;
 }
 
-function writeQrHtmlPage(status, qrDataUrl = null) {
-  latestQrHtml = buildQrHtml(status, qrDataUrl);
+function writeQrHtmlPage(status, qrDataUrl = null, pairingCode = null) {
+  latestQrHtml = buildQrHtml(status, qrDataUrl, pairingCode);
   try {
     if (fs.existsSync(path.dirname(QR_HTML_PATH))) {
       fs.writeFileSync(QR_HTML_PATH, latestQrHtml, "utf-8");
@@ -251,7 +266,7 @@ Kullanıcının mesajını veya sesini incele ve JSON döndür:
 
 async function startWhatsAppBot() {
   writeQrHtmlPage("starting");
-  const { state, saveCreds } = await useMultiFileAuthState("auth_info_baileys");
+  const { state, saveCreds } = await useMultiFileAuthState(AUTH_DIR);
   const { version } = await fetchLatestBaileysVersion();
 
   const sock = makeWASocket({
@@ -269,7 +284,7 @@ async function startWhatsAppBot() {
 
     if (qr) {
       console.log("\n========================================================");
-      console.log("📱 WHATSAPP QR KODU HAZIR!");
+      console.log(`📱 +${TARGET_ASSISTANT_PHONE} İÇİN WHATSAPP QR KODU HAZIR!`);
       console.log("========================================================\n");
       qrcodeTerminal.generate(qr, { small: true });
       try {
@@ -289,8 +304,18 @@ async function startWhatsAppBot() {
         writeQrHtmlPage("starting");
       }
     } else if (connection === "open") {
+      const connectedId = String(sock.user?.id || "");
+      if (connectedId.includes("905336330011")) {
+        console.error(
+          "⛔ Eski numara (905336330011) engellendi! Sadece +905491007729 kabul edilmektedir."
+        );
+        try {
+          await sock.logout();
+        } catch {}
+        return;
+      }
       console.log(
-        "🚀 WhatsApp Asistanı CANLI! Telefonunuzdan veya web.whatsapp.com üzerinden komut gönderebilirsiniz."
+        `🚀 WhatsApp Asistanı (+${TARGET_ASSISTANT_PHONE}) CANLI! Telefonunuzdan veya web.whatsapp.com üzerinden komut gönderebilirsiniz.`
       );
       writeQrHtmlPage("connected");
     }

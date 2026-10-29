@@ -106,7 +106,7 @@ export default function HomePage() {
   const [wizWaToken, setWizWaToken] = useState("");
   const [wizWaPhone, setWizWaPhone] = useState("");
   const [wizWaVerify, setWizWaVerify] = useState("whatsapp_gizli_anahtar_2026");
-  const [wizTestRecipient, setWizTestRecipient] = useState("");
+  const [wizTestRecipient, setWizTestRecipient] = useState("+905491007729");
   const [waTestStatus, setWaTestStatus] = useState<{
     type: "idle" | "loading" | "success" | "error";
     message: string;
