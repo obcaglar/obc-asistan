@@ -156,6 +156,13 @@ export default function HomePage() {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const callSpeechRecRef = useRef<any>(null);
   const callAudioRef = useRef<HTMLAudioElement | null>(null);
+  const callMicStreamRef = useRef<MediaStream | null>(null);
+  const callMediaRecorderRef = useRef<MediaRecorder | null>(null);
+  const callAudioChunksRef = useRef<Blob[]>([]);
+  const callVadIntervalRef = useRef<ReturnType<typeof setInterval> | null>(
+    null
+  );
+  const callAudioCtxRef = useRef<AudioContext | null>(null);
   const lastHandledCallIdRef = useRef<string>("");
   const [callNeedsAudioTap, setCallNeedsAudioTap] = useState(false);
   const callActiveRef = useRef<boolean>(false);
@@ -258,6 +265,9 @@ export default function HomePage() {
             if (!callActiveRef.current) {
               setIsVoiceCallOpen(true);
               callActiveRef.current = true;
+            } else {
+              // If already open when a new WhatsApp call arrives, immediately re-greet & listen!
+              startWhatsAppVoiceCall();
             }
           }
 
@@ -661,6 +671,22 @@ export default function HomePage() {
       return;
     }
 
+    let doneCalled = false;
+    const safetyTimer = setTimeout(() => {
+      if (!doneCalled) {
+        doneCalled = true;
+        if (onDone) onDone();
+      }
+    }, 9000);
+
+    const safeDone = () => {
+      if (!doneCalled) {
+        doneCalled = true;
+        clearTimeout(safetyTimer);
+        if (onDone) onDone();
+      }
+    };
+
     const cleanForSpeech = text
       .replace(/https?:\/\/\S+/g, "")
       .replace(
@@ -683,17 +709,17 @@ export default function HomePage() {
     try {
       const ttsUrl = `/api/tts?text=${encodeURIComponent(
         cleanForSpeech ||
-          "Komutunuz çalıştırıldı. Sıradaki komutunuzu dinliyorum."
+          "Tamamdır Özgür Bey, komutunuzu yerine getirdim. Sizi dinliyorum."
       )}`;
       const audio = new Audio(ttsUrl);
       callAudioRef.current = audio;
 
       audio.onended = () => {
         setCallNeedsAudioTap(false);
-        if (onDone) onDone();
+        safeDone();
       };
       audio.onerror = () => {
-        speakWithBrowserFemaleFallback(cleanForSpeech, onDone);
+        speakWithBrowserFemaleFallback(cleanForSpeech, safeDone);
       };
 
       const playPromise = audio.play();
@@ -703,13 +729,14 @@ export default function HomePage() {
             setCallNeedsAudioTap(false);
           })
           .catch(() => {
-            // Mobile/Desktop autoplay policy blocked un-gestured audio when triggered remotely via WhatsApp call
+            // Autoplay blocked when window popped open automatically on WhatsApp call without prior click:
+            // Immediately start listening on the microphone so the call NEVER hangs on "speaking"!
             setCallNeedsAudioTap(true);
-            speakWithBrowserFemaleFallback(cleanForSpeech, onDone);
+            safeDone();
           });
       }
     } catch {
-      speakWithBrowserFemaleFallback(cleanForSpeech, onDone);
+      safeDone();
     }
   }
 
@@ -718,6 +745,20 @@ export default function HomePage() {
       clearTimeout(callSilenceTimeoutRef.current);
       callSilenceTimeoutRef.current = null;
     }
+    if (callVadIntervalRef.current) {
+      clearInterval(callVadIntervalRef.current);
+      callVadIntervalRef.current = null;
+    }
+    if (
+      callMediaRecorderRef.current &&
+      callMediaRecorderRef.current.state !== "inactive"
+    ) {
+      try {
+        callMediaRecorderRef.current.onstop = null;
+        callMediaRecorderRef.current.stop();
+      } catch {}
+    }
+    callMediaRecorderRef.current = null;
     if (callSpeechRecRef.current) {
       try {
         callSpeechRecRef.current.onend = null;
@@ -731,77 +772,201 @@ export default function HomePage() {
     if (!callActiveRef.current) return;
     stopCallRecognitionOnly();
     callTranscriptBufferRef.current = "";
+    callAudioChunksRef.current = [];
     setCallLiveTranscript("");
     setCallStatus("listening");
 
+    // 1. Start Web Speech API (instant live Turkish transcript on screen)
     const SpeechRecognition =
       typeof window !== "undefined"
         ? window.SpeechRecognition || window.webkitSpeechRecognition
         : null;
-    if (!SpeechRecognition) return;
+    if (SpeechRecognition) {
+      try {
+        const rec = new SpeechRecognition();
+        rec.lang = "tr-TR";
+        rec.continuous = true;
+        rec.interimResults = true;
 
-    try {
-      const rec = new SpeechRecognition();
-      rec.lang = "tr-TR";
-      rec.continuous = true;
-      rec.interimResults = true;
-
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      rec.onresult = (event: any) => {
-        if (!callActiveRef.current) return;
-        let interim = "";
-        let finalAcc = "";
-        for (let i = 0; i < event.results.length; ++i) {
-          if (event.results[i].isFinal) {
-            finalAcc += event.results[i][0].transcript + " ";
-          } else {
-            interim += event.results[i][0].transcript;
-          }
-        }
-        const combined = (finalAcc + interim).trim();
-        if (combined) {
-          callTranscriptBufferRef.current = combined;
-          setCallLiveTranscript(combined);
-
-          // Hands-free auto-dispatch after 1.9 seconds of silence
-          if (callHandsFreeRef.current) {
-            if (callSilenceTimeoutRef.current) {
-              clearTimeout(callSilenceTimeoutRef.current);
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        rec.onresult = (event: any) => {
+          if (!callActiveRef.current) return;
+          let interim = "";
+          let finalAcc = "";
+          for (let i = 0; i < event.results.length; ++i) {
+            if (event.results[i].isFinal) {
+              finalAcc += event.results[i][0].transcript + " ";
+            } else {
+              interim += event.results[i][0].transcript;
             }
-            callSilenceTimeoutRef.current = setTimeout(() => {
-              const spoken = callTranscriptBufferRef.current.trim();
-              if (spoken.length >= 3 && callActiveRef.current) {
-                executeCallCommand(spoken);
-              }
-            }, 1900);
           }
-        }
+          const combined = (finalAcc + interim).trim();
+          if (combined) {
+            callTranscriptBufferRef.current = combined;
+            setCallLiveTranscript(combined);
+
+            // Hands-free auto-dispatch after 1.7 seconds of silence
+            if (callHandsFreeRef.current) {
+              if (callSilenceTimeoutRef.current) {
+                clearTimeout(callSilenceTimeoutRef.current);
+              }
+              callSilenceTimeoutRef.current = setTimeout(() => {
+                const spoken = callTranscriptBufferRef.current.trim();
+                if (spoken.length >= 2 && callActiveRef.current) {
+                  executeCallCommand(spoken);
+                }
+              }, 1700);
+            }
+          }
+        };
+
+        rec.onend = () => {
+          if (
+            callActiveRef.current &&
+            !callTranscriptBufferRef.current.trim()
+          ) {
+            try {
+              rec.start();
+            } catch {}
+          }
+        };
+
+        rec.start();
+        callSpeechRecRef.current = rec;
+      } catch {}
+    }
+
+    // 2. Start Real Microphone Audio + Voice Activity Detection (Gemini Audio STT fallback)
+    if (
+      typeof navigator !== "undefined" &&
+      navigator.mediaDevices?.getUserMedia
+    ) {
+      const attachStreamRecorder = (stream: MediaStream) => {
+        if (!callActiveRef.current) return;
+        callMicStreamRef.current = stream;
+
+        try {
+          callAudioChunksRef.current = [];
+          const recorder = new MediaRecorder(stream);
+          callMediaRecorderRef.current = recorder;
+
+          recorder.ondataavailable = (ev) => {
+            if (ev.data && ev.data.size > 0) {
+              callAudioChunksRef.current.push(ev.data);
+            }
+          };
+
+          recorder.start(250);
+
+          const AudioCtx =
+            window.AudioContext ||
+            (window as unknown as { webkitAudioContext: typeof AudioContext })
+              .webkitAudioContext;
+          if (!callAudioCtxRef.current && AudioCtx) {
+            callAudioCtxRef.current = new AudioCtx();
+          }
+          const audioCtx = callAudioCtxRef.current;
+          if (audioCtx) {
+            if (audioCtx.state === "suspended") {
+              audioCtx.resume().catch(() => {});
+            }
+            const source = audioCtx.createMediaStreamSource(stream);
+            const analyser = audioCtx.createAnalyser();
+            analyser.fftSize = 512;
+            source.connect(analyser);
+            const dataArr = new Uint8Array(analyser.frequencyBinCount);
+
+            let hasSpokenInCycle = false;
+            let silenceSinceMs = 0;
+
+            callVadIntervalRef.current = setInterval(() => {
+              if (!callActiveRef.current) return;
+              analyser.getByteTimeDomainData(dataArr);
+              let sumSq = 0;
+              for (let i = 0; i < dataArr.length; i++) {
+                const norm = (dataArr[i] - 128) / 128;
+                sumSq += norm * norm;
+              }
+              const rms = Math.sqrt(sumSq / dataArr.length);
+
+              if (rms > 0.025) {
+                hasSpokenInCycle = true;
+                silenceSinceMs = Date.now();
+                if (!callTranscriptBufferRef.current) {
+                  setCallLiveTranscript(
+                    "🎙️ Sesiniz algılanıyor, konuşmaya devam edin..."
+                  );
+                }
+              } else if (
+                hasSpokenInCycle &&
+                callHandsFreeRef.current &&
+                Date.now() - silenceSinceMs > 1750
+              ) {
+                hasSpokenInCycle = false;
+                const spokenText = callTranscriptBufferRef.current.trim();
+                if (spokenText.length >= 2) {
+                  executeCallCommand(spokenText);
+                } else if (
+                  callMediaRecorderRef.current &&
+                  callMediaRecorderRef.current.state !== "inactive"
+                ) {
+                  const recToStop = callMediaRecorderRef.current;
+                  recToStop.onstop = () => {
+                    const blob = new Blob(callAudioChunksRef.current, {
+                      type: recToStop.mimeType || "audio/webm",
+                    });
+                    if (blob.size < 1200) return;
+                    const reader = new FileReader();
+                    reader.onloadend = () => {
+                      const b64 = String(reader.result || "").split(",")[1];
+                      if (b64 && callActiveRef.current) {
+                        executeCallCommand(
+                          "",
+                          b64,
+                          recToStop.mimeType || "audio/webm"
+                        );
+                      }
+                    };
+                    reader.readAsDataURL(blob);
+                  };
+                  try {
+                    recToStop.stop();
+                  } catch {}
+                }
+              }
+            }, 150);
+          }
+        } catch {}
       };
 
-      rec.onend = () => {
-        // If still in listening state and call is active, keep mic alive continuously
-        if (
-          callActiveRef.current &&
-          !callTranscriptBufferRef.current.trim()
-        ) {
-          try {
-            rec.start();
-          } catch {}
-        }
-      };
-
-      rec.start();
-      callSpeechRecRef.current = rec;
-    } catch {}
+      if (
+        callMicStreamRef.current &&
+        callMicStreamRef.current.active &&
+        callMicStreamRef.current.getAudioTracks().some((t) => t.readyState === "live")
+      ) {
+        attachStreamRecorder(callMicStreamRef.current);
+      } else {
+        navigator.mediaDevices
+          .getUserMedia({ audio: true })
+          .then(attachStreamRecorder)
+          .catch(() => {});
+      }
+    }
   }
 
-  async function executeCallCommand(rawCommandText: string) {
+  async function executeCallCommand(
+    rawCommandText: string,
+    audioBase64?: string,
+    mimeType?: string
+  ) {
     const command = rawCommandText.trim();
-    if (!command) return;
+    if (!command && !audioBase64) return;
 
     stopCallRecognitionOnly();
     callTranscriptBufferRef.current = "";
-    setCallLiveTranscript(command);
+    setCallLiveTranscript(
+      command || "🎙️ Ses kaydınız Gemini AI ile çözümleniyor..."
+    );
     setCallStatus("processing");
     playTone(520, 0.08, "sine");
 
@@ -810,37 +975,60 @@ export default function HomePage() {
       minute: "2-digit",
     });
 
-    setChatMessages((prev) => [
-      ...prev,
-      {
-        id: "msg-call-" + Date.now(),
-        sender: "user",
-        text: command,
-        transcript: command,
-        duration: "Canlı Arama",
-        time: now,
-        type: "audio",
-        meta: null,
-      },
-    ]);
+    if (command) {
+      setChatMessages((prev) => [
+        ...prev,
+        {
+          id: "msg-call-" + Date.now(),
+          sender: "user",
+          text: command,
+          transcript: command,
+          duration: "Canlı Arama",
+          time: now,
+          type: "audio",
+          meta: null,
+        },
+      ]);
+    }
 
     const result = await processCommandThroughApi({
-      text: command,
+      text: command || undefined,
+      audioBase64,
+      mimeType,
       isVoice: true,
     });
 
+    const effectiveCommand = result?.transcript || command || "Sesli Komut";
+    if (!command && result?.transcript) {
+      setChatMessages((prev) => [
+        ...prev,
+        {
+          id: "msg-call-" + Date.now(),
+          sender: "user",
+          text: result.transcript,
+          transcript: result.transcript,
+          duration: "Canlı Arama",
+          time: now,
+          type: "audio",
+          meta: null,
+        },
+      ]);
+    }
+
     const summaryLine =
+      result?.spokenReply ||
       result?.replyText
         ?.split("\n")
         .filter((l) => l.trim() && !l.includes("Sesli Komut Algılandı"))
-        .slice(0, 3)
-        .join(" • ") || "Komut işlendi.";
+        .slice(0, 2)
+        .join(" • ") ||
+      "Komut işlendi.";
 
     setCallHistory((prev) => [
       {
         id: "ch-" + Date.now(),
         time: now,
-        command,
+        command: effectiveCommand,
         replySummary: summaryLine,
         intent: result?.intent || "help",
         syncedToGoogle: Boolean(result?.syncedToGoogle),
@@ -854,9 +1042,11 @@ export default function HomePage() {
     if (!callActiveRef.current) return;
 
     setCallStatus("speaking");
-    const voiceSummary = result?.chainedCount
-      ? `Peş peşe ${result.chainedCount} komut başarıyla çalıştırıldı. Sıradaki komutunuzu dinliyorum.`
-      : `${summaryLine}. Sıradaki komutunuzu dinliyorum.`;
+    const voiceSummary =
+      result?.spokenReply ||
+      (result?.chainedCount
+        ? `Tamamdır Özgür Bey, peş peşe ${result.chainedCount} komutunuzu da çalıştırdım. Başka bir isteğiniz var mı?`
+        : `${summaryLine}. Başka bir isteğiniz var mı?`);
 
     speakTurkishText(voiceSummary, () => {
       if (callActiveRef.current) {
@@ -880,7 +1070,7 @@ export default function HomePage() {
 
     setCallStatus("speaking");
     speakTurkishText(
-      "Merhaba Özgür Bey, ben özel sesli asistanınız. Sizi canlı dinliyorum; takvim, rehber, görev, Google Photos ve Drive komutlarınızı peş peşe söyleyebilirsiniz.",
+      "Efendim Özgür Bey, çağrınızı aldım, sizi dinliyorum. Buyurun, ne yapmamı istersiniz?",
       () => {
         if (callActiveRef.current) {
           startCallListeningCycle();
@@ -892,6 +1082,12 @@ export default function HomePage() {
   function endWhatsAppVoiceCall() {
     callActiveRef.current = false;
     stopCallRecognitionOnly();
+    if (callMicStreamRef.current) {
+      try {
+        callMicStreamRef.current.getTracks().forEach((t) => t.stop());
+      } catch {}
+      callMicStreamRef.current = null;
+    }
     if (callTimerRef.current) {
       clearInterval(callTimerRef.current);
       callTimerRef.current = null;
@@ -3127,8 +3323,9 @@ WHATSAPP_VERIFY_TOKEN=${waverify}`;
                 <button
                   onClick={() => {
                     setCallNeedsAudioTap(false);
+                    setCallStatus("speaking");
                     speakTurkishText(
-                      "Merhaba Özgür Bey, ben özel sesli asistanınız. Sizi canlı dinliyorum, komutlarınızı peş peşe söyleyebilirsiniz.",
+                      "Efendim Özgür Bey, çağrınızı aldım, sizi dinliyorum. Buyurun, ne yapmamı istersiniz?",
                       () => {
                         if (callActiveRef.current) {
                           startCallListeningCycle();
@@ -3139,7 +3336,7 @@ WHATSAPP_VERIFY_TOKEN=${waverify}`;
                   className="px-5 py-2.5 rounded-2xl bg-gradient-to-r from-green-400 to-emerald-500 text-slate-950 text-xs sm:text-sm font-extrabold shadow-xl flex items-center gap-2 animate-bounce cursor-pointer"
                 >
                   <i className="fa-solid fa-volume-high"></i>
-                  <span>🔊 Kadın Sesli Asistanı Duy &amp; Konuşmaya Başla</span>
+                  <span>🔊 Kadın Sesli Asistanı Sesli Duy (Mikrofonunuz Şu An Açık)</span>
                 </button>
               )}
 

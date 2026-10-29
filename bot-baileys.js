@@ -893,9 +893,11 @@ async function startWhatsAppBot() {
             )
             .slice(0, 2)
             .join(". ");
-          const spokenReply = result.chainedCount
-            ? `Peş peşe ${result.chainedCount} komutunuz başarıyla yerine getirildi. ${summaryLines}. Sıradaki komutunuzu dinliyorum.`
-            : `${summaryLines}. Sıradaki komutunuzu dinliyorum.`;
+          const spokenReply =
+            result.spokenReply ||
+            (result.chainedCount
+              ? `Tamamdır Özgür Bey, peş peşe söylediğiniz ${result.chainedCount} komutu da yerine getirdim. Başka bir isteğiniz var mı?`
+              : `${summaryLines}. Başka bir isteğiniz var mı?`);
           await sendFemaleVoiceNoteSafely(sock, jid, spokenReply);
         }
 
@@ -909,29 +911,35 @@ async function startWhatsAppBot() {
   });
 
   // Listen to incoming WhatsApp Voice/Video Calls:
-  // 1. Auto-launch the Live Female Voice Assistant UI on Web/Mobile/Desktop
-  // 2. Reply immediately in WhatsApp with a natural Turkish Female Voice Note + 1-tap auto-open link
-  const recentCallNotified = new Map();
+  // 1. Answer every call immediately (no 20s caller block so 2nd/3rd calls never ring unanswered!)
+  // 2. Auto-launch/activate the Live Female Voice Assistant UI on Web/Mobile/Desktop
+  // 3. Reply immediately in WhatsApp with a short, natural human Turkish Female Voice greeting
+  const processedCallIds = new Set();
+  let lastDesktopBrowserOpenMs = 0;
   sock.ev.on("call", async (calls) => {
     for (const call of calls) {
       if (call.status !== "offer") continue;
       const callerJid = call.from || call.chatId;
       if (!callerJid) continue;
-      const now = Date.now();
-      if (now - (recentCallNotified.get(callerJid) || 0) < 20000) continue;
-      recentCallNotified.set(callerJid, now);
-      activeVoiceCallJids.set(callerJid, now);
 
-      console.log(`📞 WhatsApp Sesli Arama Algılandı (${callerJid}) -> Otomatik Kadın Sesli Asistan Başlatılıyor!`);
-
-      // 1. Stop endless ringing so the assistant can immediately answer
+      // Always terminate ringing on "offer" so a 2nd or 3rd call NEVER rings unanswered!
       try {
         if (typeof sock.rejectCall === "function") {
           await sock.rejectCall(call.id, call.from);
         }
       } catch {}
 
-      // 2. Signal both Local and Vercel Cloud web apps so any open browser tab on Mobile or PC pops open the Live Voice Call UI automatically!
+      if (call.id && processedCallIds.has(call.id)) continue;
+      if (call.id) processedCallIds.add(call.id);
+
+      const now = Date.now();
+      activeVoiceCallJids.set(callerJid, now);
+
+      console.log(
+        `📞 WhatsApp Sesli Arama Algılandı (${callerJid}, callId=${call.id}) -> Canlı Kadın Sesli Asistan Yanıtlıyor!`
+      );
+
+      // 2. Signal both Local and Vercel Cloud web apps so any open browser tab on Mobile or PC immediately pops open the Live Voice Call UI and starts listening!
       axios
         .post(
           ASSISTANT_API_URL,
@@ -947,21 +955,25 @@ async function startWhatsAppBot() {
         )
         .catch(() => {});
 
-      // 3. On Windows desktop, also auto-open the Live Female Voice Call screen in the default browser if not already open
-      if (process.platform === "win32" && !process.env.RENDER) {
+      // 3. On Windows desktop, open the Live Voice Call screen if not opened in the last 35s (otherwise the open tab receives incoming_call via polling!)
+      if (
+        process.platform === "win32" &&
+        !process.env.RENDER &&
+        now - lastDesktopBrowserOpenMs > 35000
+      ) {
+        lastDesktopBrowserOpenMs = now;
         try {
           exec('start "" "https://obc-asistan.vercel.app/?call=1&autostart=1"');
         } catch {}
       }
 
-      // 4. Send the interactive Live Call Card + Spoken Turkish Female Voice Greeting directly in WhatsApp
+      // 4. Send a concise Live Call Card + short, natural Turkish Female Voice Greeting directly in WhatsApp
       try {
         const callMsg =
-          `📞 *Canlı Kadın Sesli Asistanınız Çağrınızı Yanıtladı!*\n\n` +
-          `👩‍💼 *Sesli Asistan:* _"Merhaba Özgür Bey, WhatsApp aramanızı aldım! Canlı sesli görüşme ekranınız otomatik olarak açıldı."_\n\n` +
-          `📱 *Cepten veya Web'den Tek Tıkla Canlı Sesli Görüşme Ekranı:*\n` +
-          `👉 https://obc-asistan.vercel.app/?call=1&autostart=1\n\n` +
-          `🎙️ _Dilerseniz açılan canlı görüşme ekranından, dilerseniz doğrudan bu WhatsApp sohbetinden bana peş peşe sesli komut gönderebilirsiniz; her komutunuza kadın sesli mesajla yanıt vereceğim!_${BOT_INVISIBLE_MARKER}`;
+          `📞 *Çağrınız Yanıtlandı — Sizi Dinliyorum Özgür Bey!*\n\n` +
+          `👩‍💼 _"Efendim Özgür Bey, çağrınızı aldım, sizi dinliyorum. Buyurun, ne yapmamı istersiniz?"_\n\n` +
+          `🎙️ *Doğrudan bu ekrandan sesli mesaj gönderebilir* veya canlı mikrofon ekranından konuşabilirsiniz:\n` +
+          `👉 https://obc-asistan.vercel.app/?call=1&autostart=1${BOT_INVISIBLE_MARKER}`;
         const sentCallMsg = await sock.sendMessage(callerJid, {
           text: callMsg,
         });
@@ -971,11 +983,11 @@ async function startWhatsAppBot() {
           processedMessageIds.add(sentCallMsg.key.id);
         }
 
-        // Send real Turkish Female Voice Note greeting inside WhatsApp!
+        // Send concise, natural Turkish Female Voice Note greeting inside WhatsApp!
         await sendFemaleVoiceNoteSafely(
           sock,
           callerJid,
-          "Merhaba Özgür Bey, ben özel sesli asistanınız. WhatsApp aramanızı aldım ve canlı görüşme ekranınızı otomatik olarak açtım. Takvim, rehber, görev, Google Photos ve Drive komutlarınızı peş peşe söyleyebilirsiniz, sizi dinliyorum."
+          "Efendim Özgür Bey, çağrınızı aldım, sizi dinliyorum. Buyurun, ne yapmamı istersiniz?"
         );
       } catch (err) {
         console.error("Çağrı yanıt hatası:", err.message);

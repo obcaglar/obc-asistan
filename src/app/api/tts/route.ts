@@ -1,23 +1,23 @@
 import { NextRequest, NextResponse } from "next/server";
-import { generateTurkishFemaleVoiceBuffer } from "@/lib/tts-engine";
+import { generateTurkishFemaleVoiceAudio } from "@/lib/tts-engine";
 
 export async function GET(request: NextRequest) {
   const text =
     request.nextUrl.searchParams.get("text") ||
-    "Merhaba Özgür Bey, ben özel sesli asistanınız. Sizi dinliyorum, komutlarınızı peş peşe söyleyebilirsiniz.";
+    "Efendim Özgür Bey, sizi dinliyorum. Buyurun, ne yapmamı istersiniz?";
 
-  const buf = await generateTurkishFemaleVoiceBuffer(text);
-  if (!buf) {
+  const audio = await generateTurkishFemaleVoiceAudio(text);
+  if (!audio) {
     return NextResponse.json(
       { error: "Ses oluşturulamadı" },
       { status: 500 }
     );
   }
 
-  return new NextResponse(new Uint8Array(buf), {
+  return new NextResponse(new Uint8Array(audio.buffer), {
     status: 200,
     headers: {
-      "Content-Type": "audio/mpeg",
+      "Content-Type": audio.mimeType,
       "Cache-Control": "no-store",
     },
   });
@@ -28,10 +28,10 @@ export async function POST(request: NextRequest) {
     const body = await request.json();
     const text =
       body.text ||
-      "Merhaba Özgür Bey, ben özel sesli asistanınız. Sizi dinliyorum.";
+      "Efendim Özgür Bey, sizi dinliyorum. Buyurun, ne yapmamı istersiniz?";
 
-    const buf = await generateTurkishFemaleVoiceBuffer(text);
-    if (!buf) {
+    const audio = await generateTurkishFemaleVoiceAudio(text);
+    if (!audio) {
       return NextResponse.json(
         { error: "Ses oluşturulamadı" },
         { status: 500 }
@@ -39,8 +39,8 @@ export async function POST(request: NextRequest) {
     }
 
     return NextResponse.json({
-      audioBase64: buf.toString("base64"),
-      mimeType: "audio/mpeg",
+      audioBase64: audio.buffer.toString("base64"),
+      mimeType: audio.mimeType,
     });
   } catch (err) {
     return NextResponse.json(

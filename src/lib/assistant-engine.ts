@@ -113,6 +113,7 @@ export interface AssistantProcessResult {
   selectedDriveFile?: DriveFileItem;
   selectedPhoto?: PhotoItem;
   chainedCount?: number;
+  spokenReply?: string;
 }
 
 export function isBotReplyEcho(rawText?: string): boolean {
@@ -146,7 +147,9 @@ export function isBotReplyEcho(rawText?: string): boolean {
     t.includes("Mehmet Bey ile bütçe toplantısı") ||
     t.toLocaleLowerCase("tr-TR").includes("ben özel sesli asistanınız") ||
     t.toLocaleLowerCase("tr-TR").includes("sıradaki komutunuzu dinliyorum") ||
-    t.toLocaleLowerCase("tr-TR").includes("whatsapp aramanızı aldım")
+    t.toLocaleLowerCase("tr-TR").includes("whatsapp aramanızı aldım") ||
+    t.toLocaleLowerCase("tr-TR").includes("çağrınızı aldım, sizi dinliyorum") ||
+    t.toLocaleLowerCase("tr-TR").includes("başka bir isteğiniz var mı")
   );
 }
 
@@ -4600,7 +4603,86 @@ function splitIntoSequentialCommands(rawText: string): string[] {
   return [trimmed];
 }
 
+export function buildNaturalSpokenReply(res: AssistantProcessResult): string {
+  if (res.duplicate || !res.replyText) return "";
+
+  if (res.chainedCount && res.chainedCount > 1) {
+    return `Tamamdır Özgür Bey, peş peşe söylediğiniz ${res.chainedCount} komutu da sırasıyla yerine getirdim. Başka bir isteğiniz var mı?`;
+  }
+
+  if (res.intent === "calendar") {
+    const title = res.calendarEvent?.title || res.targetQuery || "etkinlik";
+    if (res.action === "delete") {
+      return res.syncedToGoogle
+        ? `Tamamdır Özgür Bey, ${title} etkinliğini Google Takvim'inizden sildim. Başka bir isteğiniz var mı?`
+        : `Özgür Bey, takviminizde ${title} adında bir etkinlik bulamadım.`;
+    }
+    if (res.action === "update") {
+      return `Tamamdır Özgür Bey, ${title} etkinliğinizi ${res.calendarEvent?.date || ""} saat ${res.calendarEvent?.startTime || ""} olarak güncelledim. Başka bir isteğiniz var mı?`;
+    }
+    if (res.action === "share") {
+      return `Tamamdır Özgür Bey, ${title} etkinliği için ilgili kişiye takvim davetiyesini gönderdim. Başka bir isteğiniz var mı?`;
+    }
+    return `Tamamdır Özgür Bey, ${title} etkinliğini ${res.calendarEvent?.date || "takviminize"} saat ${res.calendarEvent?.startTime || ""} için Google Takvim'inize ekledim. Başka bir isteğiniz var mı?`;
+  }
+
+  if (res.intent === "contact") {
+    const name = res.contact?.name || res.targetQuery || "kişi";
+    if (res.action === "delete") {
+      return `Tamamdır Özgür Bey, ${name} kaydını Google Rehber'inizden sildim. Başka bir isteğiniz var mı?`;
+    }
+    if (res.action === "update") {
+      return `Tamamdır Özgür Bey, ${name} kişisinin bilgilerini Google Rehber'inizde güncelledim. Başka bir isteğiniz var mı?`;
+    }
+    return `Tamamdır Özgür Bey, ${name} kişisini Google Rehber'inize kaydettim. Başka bir isteğiniz var mı?`;
+  }
+
+  if (res.intent === "note") {
+    const content = res.note?.title || res.note?.content || "notunuzu";
+    return `Tamamdır Özgür Bey, ${content} konusunu Google Görevler ve Takvim listenize işledim. Başka bir isteğiniz var mı?`;
+  }
+
+  if (res.intent === "photos") {
+    if (res.selectedPhoto) {
+      return `Tamamdır Özgür Bey, seçtiğiniz ${res.selectedPhoto.title} fotoğrafını şimdi sizinle paylaşıyorum. Başka bir isteğiniz var mı?`;
+    }
+    const count = res.photos?.length || 0;
+    if (count > 0) {
+      return `Özgür Bey, ${res.targetQuery || "istediğiniz"} araması için ${count} fotoğraf buldum ve ekrana getirdim. İçlerinden birini paylaşmamı isterseniz numarasını söyleyebilirsiniz.`;
+    }
+    return `Özgür Bey, ${res.targetQuery || "bu"} aramasına uygun bir fotoğraf bulamadım. Farklı bir tarih veya isim söylemek ister misiniz?`;
+  }
+
+  if (res.intent === "drive") {
+    if (res.selectedDriveFile) {
+      return `Tamamdır Özgür Bey, ${res.selectedDriveFile.name} dosyasını şimdi sizinle paylaşıyorum. Başka bir isteğiniz var mı?`;
+    }
+    const count = res.driveFiles?.length || 0;
+    if (count > 0) {
+      return `Özgür Bey, Google Drive'da ${res.targetQuery || "istediğiniz"} ile ilgili ${count} dosya buldum ve seçenekler halinde listeledim. Hangisini paylaşmamı istersiniz?`;
+    }
+    return `Özgür Bey, Google Drive'da ${res.targetQuery || "bu"} aramasına uygun bir dosya bulamadım. Başka bir dosya adı söylemek ister misiniz?`;
+  }
+
+  return "Özgür Bey, sizi dinliyorum. Takvim, rehber, görev, Google Photos veya Drive için ne yapmamı istersiniz?";
+}
+
 export async function processAssistantInput(params: {
+  text?: string;
+  audioBase64?: string;
+  mimeType?: string;
+  isVoice?: boolean;
+  credentials?: AssistantCredentials;
+  _skipChaining?: boolean;
+}): Promise<AssistantProcessResult> {
+  const result = await processAssistantInputCore(params);
+  if (!result.spokenReply && !result.duplicate) {
+    result.spokenReply = buildNaturalSpokenReply(result);
+  }
+  return result;
+}
+
+async function processAssistantInputCore(params: {
   text?: string;
   audioBase64?: string;
   mimeType?: string;
