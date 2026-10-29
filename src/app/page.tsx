@@ -161,6 +161,46 @@ export default function HomePage() {
         }
       })
       .catch(() => {});
+
+    const syncInterval = setInterval(() => {
+      fetch("/api/assistant")
+        .then((r) => r.json())
+        .then((data) => {
+          if (data?.recentWebhookEvents) {
+            const { calendars, contacts, notes } = data.recentWebhookEvents;
+            if (Array.isArray(calendars) && calendars.length > 0) {
+              setCalendarEvents((prev) => {
+                const existingIds = new Set(prev.map((x) => x.id));
+                const fresh = calendars.filter(
+                  (x: CalendarItem) => !existingIds.has(x.id)
+                );
+                return fresh.length > 0 ? [...fresh, ...prev] : prev;
+              });
+            }
+            if (Array.isArray(contacts) && contacts.length > 0) {
+              setContactsList((prev) => {
+                const existingIds = new Set(prev.map((x) => x.id));
+                const fresh = contacts.filter(
+                  (x: ContactItem) => !existingIds.has(x.id)
+                );
+                return fresh.length > 0 ? [...fresh, ...prev] : prev;
+              });
+            }
+            if (Array.isArray(notes) && notes.length > 0) {
+              setNotesList((prev) => {
+                const existingIds = new Set(prev.map((x) => x.id));
+                const fresh = notes.filter(
+                  (x: NoteItem) => !existingIds.has(x.id)
+                );
+                return fresh.length > 0 ? [...fresh, ...prev] : prev;
+              });
+            }
+          }
+        })
+        .catch(() => {});
+    }, 3000);
+
+    return () => clearInterval(syncInterval);
   }, []);
 
   // Save changes to localStorage

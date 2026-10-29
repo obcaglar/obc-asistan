@@ -32,12 +32,14 @@ export async function POST(request: NextRequest) {
       mimeType,
       isVoice,
       credentials,
+      fromWhatsAppBot,
     }: {
       text?: string;
       audioBase64?: string;
       mimeType?: string;
       isVoice?: boolean;
       credentials?: AssistantCredentials;
+      fromWhatsAppBot?: boolean;
     } = body;
 
     const result = await processAssistantInput({
@@ -47,6 +49,18 @@ export async function POST(request: NextRequest) {
       isVoice,
       credentials,
     });
+
+    if (fromWhatsAppBot) {
+      if (result.calendarEvent) {
+        recentWebhookEvents.calendars.unshift(result.calendarEvent);
+      }
+      if (result.contact) {
+        recentWebhookEvents.contacts.unshift(result.contact);
+      }
+      if (result.note) {
+        recentWebhookEvents.notes.unshift(result.note);
+      }
+    }
 
     return NextResponse.json(result);
   } catch (error) {

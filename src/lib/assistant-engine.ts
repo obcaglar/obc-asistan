@@ -1,3 +1,30 @@
+import fs from "fs";
+import path from "path";
+
+function loadFreshEnv() {
+  try {
+    const envPath = path.join(process.cwd(), ".env.local");
+    if (!fs.existsSync(envPath)) return;
+    const lines = fs.readFileSync(envPath, "utf-8").split(/\r?\n/);
+    for (const line of lines) {
+      const trimmed = line.trim();
+      if (!trimmed || trimmed.startsWith("#")) continue;
+      const eqIdx = trimmed.indexOf("=");
+      if (eqIdx > 0) {
+        const key = trimmed.slice(0, eqIdx).trim();
+        const val = trimmed.slice(eqIdx + 1).trim();
+        if (val && !process.env[key]) {
+          process.env[key] = val;
+        } else if (val) {
+          process.env[key] = val;
+        }
+      }
+    }
+  } catch {
+    // Ignore on read-only filesystems
+  }
+}
+
 export interface CalendarItem {
   id: string;
   title: string;
@@ -409,6 +436,7 @@ Kullanıcının gönderdiği metni veya ses kaydını incele ve JSON döndür:
 export async function resolveGoogleAccessToken(
   creds: AssistantCredentials
 ): Promise<string | null> {
+  loadFreshEnv();
   if (creds.googleAccessToken) {
     return creds.googleAccessToken;
   }
@@ -555,6 +583,7 @@ export async function processAssistantInput(params: {
   isVoice?: boolean;
   credentials?: AssistantCredentials;
 }): Promise<AssistantProcessResult> {
+  loadFreshEnv();
   const creds = params.credentials || {};
   const geminiKey = creds.geminiApiKey || process.env.GEMINI_API_KEY;
   const isVoice = Boolean(params.isVoice || params.audioBase64);
