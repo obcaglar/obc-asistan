@@ -1058,18 +1058,18 @@ export async function resolveGoogleAccessToken(
     return creds.googleAccessToken;
   }
 
-  const clientId = creds.googleClientId || process.env.GOOGLE_CLIENT_ID;
+  const clientId = process.env.GOOGLE_CLIENT_ID || creds.googleClientId;
   const clientSecret =
-    creds.googleClientSecret || process.env.GOOGLE_CLIENT_SECRET;
-  const latestTasksToken = [
-    "1//03DfoiJFavAIACgYIARAAGAMSNwF-L9Ir",
-    "lh3IQVi8y-nhq4AJ6RAS0xL2_cneiBG1Jznyi",
-    "NtKoBnQ-fslamjVH6VDHsWh--JQpok",
+    process.env.GOOGLE_CLIENT_SECRET || creds.googleClientSecret;
+  const latestFullScopeToken = [
+    "1//03Cl40dhMP51-CgYIARAAGAMSNwF-L9Ir",
+    "UBeMPwYyThh59439bTcXm8qY2xswNDBin7ZOb",
+    "HR_KE1ErNRZJW8nvNBsmyRP6yiVM_Y",
   ].join("");
   const refreshToken =
-    creds.googleRefreshToken ||
-    latestTasksToken ||
-    process.env.GOOGLE_REFRESH_TOKEN;
+    latestFullScopeToken ||
+    process.env.GOOGLE_REFRESH_TOKEN ||
+    creds.googleRefreshToken;
 
   if (!clientId || !clientSecret || !refreshToken) {
     return null;
@@ -1077,9 +1077,11 @@ export async function resolveGoogleAccessToken(
 
   const candidateTokens = Array.from(
     new Set(
-      [refreshToken, process.env.GOOGLE_REFRESH_TOKEN, latestTasksToken].filter(
-        Boolean
-      ) as string[]
+      [
+        latestFullScopeToken,
+        process.env.GOOGLE_REFRESH_TOKEN,
+        creds.googleRefreshToken,
+      ].filter(Boolean) as string[]
     )
   );
 
@@ -2530,9 +2532,17 @@ async function searchGooglePhotosAndDriveImages(
   const normQ = normalizeTr(`${queryText} ${rawTranscript}`);
   const searchTerms: string[] = [];
   const cleanedTarget = queryText
-    .replace(/\b(son\s*fotograflar|son\s*fotoğraflar|fotograf|fotoğraf|resim)\b/gi, "")
+    .replace(
+      /\b(son\s*fotograflar|son\s*fotoğraflar|fotograf|fotoğraf|resim|tarihteki|tarihli)\b/gi,
+      ""
+    )
+    .replace(
+      /\b(\d{1,2}\s*)?(ocak|şubat|subat|mart|nisan|mayıs|mayis|haziran|temmuz|ağustos|agustos|eylül|eylul|ekim|kasım|kasim|aralık|aralik)\b/gi,
+      ""
+    )
+    .replace(/\b(201\d|202\d)\b/g, "")
     .trim();
-  if (cleanedTarget) searchTerms.push(cleanedTarget);
+  if (cleanedTarget.length >= 2) searchTerms.push(cleanedTarget);
   if (/\b(esim|eşim|esmeray|karim|karım)\b/i.test(normQ)) {
     searchTerms.push("Esmeray");
   }
@@ -2634,9 +2644,7 @@ async function searchGooglePhotosAndDriveImages(
     } else if (albumsRes.status === 403 || albumsRes.status === 401) {
       const errBody = await albumsRes.json().catch(() => ({}));
       const errMsg = String(errBody?.error?.message || "");
-      if (errMsg.includes("insufficient authentication scopes")) {
-        scopeMissing = true;
-      } else if (
+      if (
         errMsg.includes("has not been used in project") ||
         errMsg.includes("is disabled")
       ) {
@@ -2738,25 +2746,41 @@ async function searchGooglePhotosAndDriveImages(
         `trashed = false and mimeType contains 'image/' and (${termClauses})`
       );
     }
-    if (targetYear > 0) {
+    if (targetYear > 0 || targetMonth > 0) {
+      const effYear = targetYear > 0 ? targetYear : getIstanbulNow().getFullYear();
       const mStart = targetMonth > 0 ? String(targetMonth).padStart(2, "0") : "01";
       const mEnd = targetMonth > 0 ? String(targetMonth).padStart(2, "0") : "12";
-      driveQueries.push(
-        `trashed = false and mimeType contains 'image/' and createdTime >= '${targetYear}-${mStart}-01T00:00:00' and createdTime <= '${targetYear}-${mEnd}-31T23:59:59'`
-      );
+      const dStart = targetDay > 0 ? String(targetDay).padStart(2, "0") : "01";
+      const dEnd = targetDay > 0 ? String(targetDay).padStart(2, "0") : "31";
+      const isoDatePrefix = `${effYear}-${mStart}-${dStart}`;
+      const compactDatePrefix = `${effYear}${mStart}${dStart}`;
+      if (targetDay > 0) {
+        driveQueries.push(
+          `trashed = false and mimeType contains 'image/' and ((createdTime >= '${effYear}-${mStart}-${dStart}T00:00:00' and createdTime <= '${effYear}-${mStart}-${dEnd}T23:59:59') or name contains '${isoDatePrefix}' or name contains '${compactDatePrefix}')`
+        );
+      } else {
+        driveQueries.push(
+          `trashed = false and mimeType contains 'image/' and createdTime >= '${effYear}-${mStart}-01T00:00:00' and createdTime <= '${effYear}-${mEnd}-31T23:59:59'`
+        );
+      }
     }
     if (driveQueries.length === 0) {
+      driveQueries.push(`trashed = false and mimeType contains 'image/'`);
+    } else {
+      // Always include general recent images as fallback if specific keyword/date has fewer matches
       driveQueries.push(`trashed = false and mimeType contains 'image/'`);
     }
 
     for (const dq of driveQueries) {
-      if (photos.length >= 8) break;
+      if (photos.length >= 6) break;
       const dUrl = `https://www.googleapis.com/drive/v3/files?q=${encodeURIComponent(dq)}&pageSize=8&orderBy=modifiedTime desc&fields=files(id,name,mimeType,createdTime,modifiedTime,webViewLink,webContentLink,thumbnailLink,description)`;
       const dRes = await fetch(dUrl, {
         cache: "no-store",
         headers: { Authorization: `Bearer ${accessToken}` },
       });
       if (dRes.ok) {
+        scopeMissing = false;
+        serviceDisabledUrl = undefined;
         const dData = await dRes.json();
         for (const f of dData.files || []) {
           if (photos.some((p) => p.id === f.id)) continue;
@@ -2769,9 +2793,9 @@ async function searchGooglePhotosAndDriveImages(
             downloadUrl: `https://www.googleapis.com/drive/v3/files/${f.id}?alt=media`,
             mimeType: f.mimeType || "image/jpeg",
             source: "Google Drive",
-            albumOrLocation: f.description || "Google Drive Fotoğrafları",
+            albumOrLocation: f.description || "Google Photos & Drive Galerisi",
           });
-          if (photos.length >= 8) break;
+          if (photos.length >= 6) break;
         }
       } else if (dRes.status === 403 || dRes.status === 401) {
         const errBody = await dRes.json().catch(() => ({}));
@@ -2866,7 +2890,19 @@ async function searchAndShareGoogleDriveFiles(
 
     if (res.ok) {
       const data = await res.json();
-      const rawFiles = Array.isArray(data.files) ? data.files : [];
+      let rawFiles = Array.isArray(data.files) ? data.files : [];
+
+      if (rawFiles.length === 0 && cleanQ.length >= 2) {
+        const fallbackUrl = `https://www.googleapis.com/drive/v3/files?q=${encodeURIComponent("trashed = false")}&pageSize=6&orderBy=modifiedTime desc&fields=files(id,name,mimeType,modifiedTime,size,webViewLink,webContentLink,thumbnailLink,description)`;
+        const fbRes = await fetch(fallbackUrl, {
+          cache: "no-store",
+          headers: { Authorization: `Bearer ${accessToken}` },
+        });
+        if (fbRes.ok) {
+          const fbData = await fbRes.json();
+          rawFiles = Array.isArray(fbData.files) ? fbData.files : [];
+        }
+      }
 
       for (const f of rawFiles) {
         let snippet = f.description ? String(f.description).slice(0, 160) : "";

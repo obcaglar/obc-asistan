@@ -113,6 +113,7 @@ function writeQrHtmlPage(status, qrDataUrl = null, pairingCode = null) {
 
 // Standalone Cloud Fallback (works 24/7 even when localhost:3000 is not running)
 async function getGoogleAccessToken() {
+  require("dotenv").config({ path: ".env.local", override: true });
   const clientId = process.env.GOOGLE_CLIENT_ID;
   const clientSecret = process.env.GOOGLE_CLIENT_SECRET;
   const refreshToken = process.env.GOOGLE_REFRESH_TOKEN;
@@ -637,6 +638,7 @@ async function startWhatsAppBot() {
           `📩 Komut işleniyor (${jid}):`,
           trimmedText || `[Sesli Mesaj - ${mimeType}]`
         );
+        require("dotenv").config({ path: ".env.local", override: true });
         const envCredentials = {
           geminiApiKey: process.env.GEMINI_API_KEY,
           googleClientId: process.env.GOOGLE_CLIENT_ID,
