@@ -168,11 +168,10 @@ Kullanıcının mesajını veya Türkçe ses kaydını incele ve JSON döndür:
     }
 
     const candidateModels = [
-      "gemini-3.5-flash",
-      "gemini-3.6-flash",
-      "gemini-3.5-flash-lite",
       "gemini-3.1-flash-lite",
       "gemini-flash-lite-latest",
+      "gemini-3.5-flash",
+      "gemini-3.6-flash",
     ];
 
     for (const modelName of candidateModels) {
@@ -186,7 +185,7 @@ Kullanıcının mesajını veya Türkçe ses kaydını incele ve JSON döndür:
               temperature: 0.1,
             },
           },
-          { timeout: 8000 }
+          { timeout: 6000 }
         );
         const rawJson = gRes.data?.candidates?.[0]?.content?.parts?.[0]?.text;
         if (rawJson) {
@@ -205,6 +204,19 @@ Kullanıcının mesajını veya Türkçe ses kaydını incele ve JSON döndür:
 
   if (parsed?.intent === "calendar" && parsed.calendar) {
     const evt = parsed.calendar;
+    const trLower = String(parsed.transcript || text || "").toLocaleLowerCase("tr-TR");
+    const isDeleteCmd =
+      parsed.action === "delete" ||
+      /\b(sil|siler|silin|iptal|kaldır|kaldir|çıkar|cikar)\b/i.test(trLower);
+
+    if (isDeleteCmd) {
+      return {
+        transcript: parsed.transcript,
+        replyText:
+          `⚠️ *Geçici Bağlantı Uyarısı:* Silme işlemi için ana sunucu yanıtı bekleniyor. Lütfen birkaç saniye sonra tekrar deneyin.`,
+      };
+    }
+
     let synced = false;
     if (accessToken) {
       try {

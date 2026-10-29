@@ -306,6 +306,7 @@ export function parseCommandLocally(
   recipientQuery?: string;
   shiftMinutes?: number;
   hasExplicitTime?: boolean;
+  hasExplicitDate?: boolean;
   calendar?: Omit<CalendarItem, "id" | "createdTime" | "source">;
   contact?: Omit<ContactItem, "id" | "addedDate">;
   note?: Omit<NoteItem, "id" | "time">;
@@ -595,6 +596,7 @@ export function parseCommandLocally(
       recipientQuery: recipientQuery || undefined,
       shiftMinutes,
       hasExplicitTime,
+      hasExplicitDate: parsedDateInfo.hasExplicitDate,
       calendar: {
         title,
         date: dateStr,
@@ -655,6 +657,7 @@ async function analyzeWithGemini(params: {
   audioBase64?: string;
   mimeType?: string;
   apiKey: string;
+  calendarContext?: string;
 }): Promise<{
   transcript: string;
   intent: "calendar" | "contact" | "note" | "help";
@@ -686,6 +689,9 @@ async function analyzeWithGemini(params: {
 } | null> {
   const now = getIstanbulNow();
   const todayIso = formatIsoDate(now);
+  const tomorrowDate = new Date(now);
+  tomorrowDate.setDate(now.getDate() + 1);
+  const tomorrowIso = formatIsoDate(tomorrowDate);
   const dayNames = [
     "Pazar",
     "Pazartesi",
@@ -697,18 +703,22 @@ async function analyzeWithGemini(params: {
   ];
   const todayDayName = dayNames[now.getDay()];
 
+  const calendarScheduleBlock = params.calendarContext
+    ? `\nKULLANICININ GÜNCEL GOOGLE TAKVİM (AJANDA) LİSTESİ (Silme/Güncelleme/Paylaşma işlemlerinde gün, saat ve isim eşleştirmesi için bu gerçek listeyi baz al):\n${params.calendarContext}\n`
+    : "";
+
   const systemInstruction = `Sen Türkçe çalışan çok hassas bir WhatsApp & Google Workspace Asistanısın.
-Bugünün tarihi (Europe/Istanbul): ${todayIso} (${todayDayName}).
+Bugünün tarihi (Europe/Istanbul): ${todayIso} (${todayDayName}). Yarının tarihi: ${tomorrowIso}.${calendarScheduleBlock}
 Kullanıcının gönderdiği metni veya Türkçe ses kaydını (Voice Message) çok dikkatli dinle/incele ve tam olarak şu JSON yapısını döndür:
 {
-  "transcript": "Ses kaydının veya yazılı mesajın tam ve doğru Türkçe metni (Örn: saatleri 16:00 veya 20:00, telefonları 05321112233, e-postaları ali@gmail.com biçiminde yaz)",
+  "transcript": "Ses kaydının veya yazılı mesajın tam ve doğru Türkçe metni (Örn: saatleri 16:00 veya 14:30, telefonları 05321112233, e-postaları ali@gmail.com biçiminde yaz)",
   "intent": "calendar" | "contact" | "note" | "help",
   "action": "create" | "update" | "delete" | "share",
-  "targetQuery": "Güncellenecek, silinecek veya başka birine gönderilecek toplantının/görevin/kişinin aranacağı temiz anahtar kelime (Örn: 'Bütçe Toplantısı', 'Koşu', 'Halil', 'Ali Kaya')",
+  "targetQuery": "Güncellenecek, silinecek veya başka birine gönderilecek toplantının/etkinliğin/kişinin tam adı (Eğer yukarıdaki Güncel Google Takvim Listesinde o gün ve saatte bir etkinlik varsa, o etkinliğin listedeki TAM BAŞLIĞINI yaz!)",
   "recipientEmail": "Etkinlik veya görev bir e-posta adresine gönderilecekse/davet edilecekse alıcı e-posta adresi (Örn: 'ahmet@ornek.com'), yoksa boş string",
   "recipientQuery": "Etkinlik veya görev rehberdeki bir kişiye gönderilecekse o kişinin adı (Örn: 'Ahmet Yılmaz'), yoksa boş string",
   "calendar": {
-    "title": "Kısa, temiz ve net Etkinlik/Toplantı/Görev başlığı (Örn: 'Koşu', 'Eşimi ve Oğlumu Ara', 'Bütçe Toplantısı'. ASLA 'ajandama etkinlik girer misin', 'takvime ekle', saati veya alıcı e-postasını başlığa yazma!)",
+    "title": "Kısa, temiz ve net Etkinlik/Toplantı/Görev başlığı (Silme veya güncelleme ise Güncel Google Takvim Listesindeki eşleşen etkinliğin tam başlığı; yeni ekleme ise 'ajandama etkinlik girer misin', 'takvime ekle', saati veya alıcı e-postasını başlığa yazma!)",
     "date": "YYYY-MM-DD",
     "startTime": "HH:mm",
     "endTime": "HH:mm",
@@ -730,22 +740,17 @@ Kullanıcının gönderdiği metni veya Türkçe ses kaydını (Voice Message) �
   }
 }
 Kurallar:
-1. SESLİ KOMUT (VOICE) ÇÖZÜMLEME VE HASSASİYET KURALLARI:
-   - Kullanıcı sesli mesajda başında "!" olmadan doğal konuşur ("Saat 16:00'da koşu için ajandama etkinlik girer misin", "Akşam 20:00 gibi eşimi ve oğlumu ara", "Yarın öğleden sonra üç buçukta Ahmet Bey ile toplantı ayarla", "Rehbere Halil'i kaydet numarası sıfır beş yüz otuz üç...").
-   - Sesli söylenen telefon numaralarını rakama çevir (Örn: "sıfır beş yüz otuz iki..." -> "0532...").
-   - Sesli söylenen saatleri 24 saatlik HH:mm formatına çevir (Örn: "üç buçuk" -> "15:30", "dörtte / on altıda" -> "16:00", "akşam sekiz / yirmi" -> "20:00", "sabah dokuz" -> "09:00").
-   - Kullanıcı gün belirtmeden sadece saat söylediyse (Örn: "Saat 16:00'da koşu", "Akşam 20:00 gibi eşimi ve oğlumu ara"), bugünün tarihini (${todayIso}) kullan; sadece "yarın" derse yarının tarihini kullan.
-   - Sesli söylenen e-posta adreslerini ("et", "at", "nokta") standart e-posta formatına çevir (Örn: "ali et gmail nokta com" -> "ali@gmail.com").
-2. TAKVİM / AJANDA ("calendar") vs NOT ("note") AYRIMI:
-   - Mesajda "ajanda", "ajandama", "ajandaya", "takvim", "takvime", "etkinlik", "toplantı", "randevu", "görev", "görüşme", "girer misin", "gir" geçiyorsa VEYA belirli bir saat/zaman içeren bir eylem/hatırlatma/arama ("Akşam 20:00 gibi eşimi ve oğlumu ara", "Saat 16:00'da koşu") varsa, intent KESİNLİKLE "calendar" olmalıdır (Not defterine değil, Google Takvim/Ajanda'ya kaydedilmelidir!).
-   - Sadece saat/tarih içermeyen genel bilgi/liste veya açıkça "not al / not defterine yaz" denilen mesajlarda intent "note" olmalıdır.
-3. "action" alanı:
-   - Yeni etkinlik/toplantı/görev veya kişi ekleme/planlama/girme ise: "create" (Eğer yeni eklerken aynı zamanda bir e-postaya/kişiye gönderilmesi isteniyorsa yine "create" seç ve "recipientEmail" / "recipientQuery" alanlarını doldur).
-   - Takvimde MEVCUT olan bir etkinliği veya görevi başka bir kullanıcıya/e-postaya gönderme/davet etme/paylaşma ise ("!toplanti gönder ...", "... toplantısını ali@gmail.com adresine gönder"): "share"
-   - Mevcut bir toplantıyı veya kişiyi güncelleme/değiştirme/erteleme/öne çekme/ileriye alma ise: "update". (Örn: "15:30'daki toplantıyı 1 saat öne çek" -> startTime: "14:30", endTime: "15:30"; "16:00'daki toplantıyı 1 saat ileriye al" -> startTime: "17:00", endTime: "18:00").
-   - Mevcut bir toplantıyı veya kişiyi silme/kaldırma/iptal etme ise: "delete"
-4. "targetQuery" alanı: "update", "delete" veya "share" işlemlerinde Google Takvim veya Google Rehber'de aranacak mevcut toplantı/görev başlığı veya kişi ismidir (tırnak işaretlerini, saatleri ve "toplantısını/kişisini" gibi ekleri temizle).
-5. Mesaj "!rehber", "!kisi", "rehber", "kişi", "numara" içeriyorsa veya bir kişinin telefon numarasını kaydetme/güncelleme/silme komutuysa intent KESİNLİKLE "contact" olmalıdır.`;
+1. SİLME ("delete") VE GÜNCELLEME ("update") KESİN KURALI:
+   - Mesajda "sil", "siler misin", "iptal", "iptal et", "kaldır", "çıkar", "ajandamdan sil", "takvimden sil" geçiyorsa "action" KESİNLİKLE "delete" olmalıdır! ASLA "create" yapma ve yeni etkinlik ekleme!
+   - Kullanıcı silmek veya güncellemek istediği etkinliğin gününü ve saatini söylediğinde (Örn: "Yarın saat 16:00'daki görüşmeyi sil", "Bugün 14:30'daki toplantıyı sil", "Yarın 17:00'deki yapmaya çık etkinliğini sil"), yukarıdaki KULLANICININ GÜNCEL GOOGLE TAKVİM LİSTESİ'ne bak:
+     • O tarih ve saatteki etkinliğin tam başlığını "targetQuery" ve "calendar.title" alanına yaz!
+     • Kullanıcının söylediği tarihi ("bugün" -> ${todayIso}, "yarın" -> ${tomorrowIso}) "calendar.date" alanına, saati ise "calendar.startTime" alanına (HH:mm formatında) mutlaka yaz!
+2. SESLİ KOMUT (VOICE) ÇÖZÜMLEME VE HASSASİYET KURALLARI:
+   - Sesli söylenen saatleri 24 saatlik HH:mm formatına çevir (Örn: "iki buçuk / on dört otuz" -> "14:30", "üç buçuk" -> "15:30", "dörtte / on altıda" -> "16:00", "beşte / on yedide" -> "17:00", "akşam sekiz / yirmi" -> "20:00").
+   - Kullanıcı sesli konuşurken "Crater", "Lunixi", "Cordella", "Chubb" gibi özel isimleri telaffuz ettiğinde yukarıdaki Güncel Google Takvim Listesindeki gerçek etkinlik isimleriyle eşleştir ("Crater" kelimesini "Jüri" veya "Kriter" olarak yanlış yazma!).
+3. TAKVİM / AJANDA ("calendar") vs NOT ("note") AYRIMI:
+   - Mesajda "ajanda", "ajandama", "ajandaya", "takvim", "takvime", "etkinlik", "toplantı", "randevu", "görev", "görüşme", "girer misin", "gir" geçiyorsa VEYA belirli bir saat/zaman içeren bir eylem/hatırlatma/arama varsa, intent KESİNLİKLE "calendar" olmalıdır.
+4. Mesaj "!rehber", "!kisi", "rehber", "kişi", "numara" içeriyorsa intent KESİNLİKLE "contact" olmalıdır.`;
 
   const cleanMimeType =
     (params.mimeType || "audio/ogg").split(";")[0].trim() || "audio/ogg";
@@ -763,12 +768,10 @@ Kurallar:
     parts.push({ text: `Kullanıcı mesajı: ${params.text}` });
   }
 
-  // Prioritize full high-accuracy Gemini 3.5 Flash first for Turkish voice STT & NLU
+  // Verified 1.2s ultra-fast models with active quota on this API key
   const candidateModels = [
-    "gemini-3.5-flash",
-    "gemini-3.6-flash",
-    "gemini-3.5-flash-lite",
     "gemini-3.1-flash-lite",
+    "gemini-3.1-flash-lite-preview",
     "gemini-flash-lite-latest",
   ];
 
@@ -780,7 +783,7 @@ Kurallar:
           method: "POST",
           cache: "no-store",
           headers: { "Content-Type": "application/json" },
-          signal: AbortSignal.timeout(8000),
+          signal: AbortSignal.timeout(6500),
           body: JSON.stringify({
             contents: [{ parts }],
             generationConfig: {
@@ -899,54 +902,227 @@ function isRecentlyCreatedSignature(sig: string, windowMs = 45000): boolean {
   return false;
 }
 
+const GENERIC_CALENDAR_STOPWORDS = new Set([
+  "toplanti",
+  "toplantisi",
+  "toplantisini",
+  "toplantilar",
+  "etkinlik",
+  "etkinligi",
+  "etkinligini",
+  "randevu",
+  "randevusu",
+  "randevusunu",
+  "gorusme",
+  "gorusmesi",
+  "gorusmesini",
+  "gorev",
+  "gorevi",
+  "gorevini",
+  "ajanda",
+  "ajandadaki",
+  "ajandamdan",
+  "ajandadan",
+  "takvim",
+  "takvimdeki",
+  "takvimden",
+  "takvimimden",
+  "bugun",
+  "bugunku",
+  "yarin",
+  "yarinki",
+  "saat",
+  "saatteki",
+  "saatindeki",
+  "olan",
+  "deki",
+  "daki",
+  "teki",
+  "taki",
+  "sil",
+  "siler",
+  "silin",
+  "iptal",
+  "kaldir",
+  "cikar",
+  "misin",
+  "musun",
+  "lutfen",
+]);
+
+function extractDistinctCalendarWords(query: string): string[] {
+  const norm = normalizeTr(query)
+    .replace(/\b\d{1,2}[:.]\d{2}\b/g, " ")
+    .replace(/\b\d+\b/g, " ");
+  return norm
+    .split(/\s+/)
+    .map((w) => w.trim())
+    .filter((w) => w.length >= 3 && !GENERIC_CALENDAR_STOPWORDS.has(w));
+}
+
+async function getUpcomingCalendarSummaryForPrompt(
+  accessToken: string
+): Promise<string> {
+  try {
+    const minDate = new Date(Date.now() - 12 * 3600 * 1000).toISOString();
+    const maxDate = new Date(Date.now() + 14 * 86400 * 1000).toISOString();
+    const url = `https://www.googleapis.com/calendar/v3/calendars/primary/events?timeMin=${encodeURIComponent(minDate)}&timeMax=${encodeURIComponent(maxDate)}&singleEvents=true&orderBy=startTime&maxResults=40`;
+    const res = await fetch(url, {
+      cache: "no-store",
+      headers: { Authorization: `Bearer ${accessToken}` },
+    });
+    if (!res.ok) return "";
+    const data = await res.json();
+    const items = Array.isArray(data.items) ? data.items : [];
+    const lines: string[] = [];
+    for (const item of items) {
+      if (item.status === "cancelled") continue;
+      const rawStart = String(item.start?.dateTime || item.start?.date || "");
+      const m = rawStart.match(/^(\d{4}-\d{2}-\d{2})(?:T(\d{2}:\d{2}))?/);
+      const datePart = m ? m[1] : rawStart;
+      const timePart = m && m[2] ? m[2] : "Tüm Gün";
+      const title = String(item.summary || "İsimsiz Etkinlik").trim();
+      lines.push(`- [${datePart} ${timePart}] "${title}"`);
+    }
+    return lines.join("\n");
+  } catch {
+    return "";
+  }
+}
+
+interface CalendarSearchOptions {
+  date?: string;
+  startTime?: string;
+  hasExplicitDate?: boolean;
+  hasExplicitTime?: boolean;
+}
+
 async function findGoogleCalendarEvent(
   accessToken: string,
-  query: string
+  query: string,
+  options?: CalendarSearchOptions
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
 ): Promise<any | null> {
   try {
     const cleanQuery = query.trim();
-    const qNorm = normalizeTr(cleanQuery);
+    const distinctWords = extractDistinctCalendarWords(cleanQuery);
+    const distinctPhrase = distinctWords.join(" ");
 
-    // 1. Check in-memory recent calendar events map first (0ms instant lookup)
-    for (const [cachedTitleNorm, eventId] of recentCalendarEventsMap.entries()) {
-      if (
-        cachedTitleNorm === qNorm ||
-        cachedTitleNorm.includes(qNorm) ||
-        qNorm.includes(cachedTitleNorm)
-      ) {
-        const directRes = await fetch(
-          `https://www.googleapis.com/calendar/v3/calendars/primary/events/${encodeURIComponent(eventId)}`,
-          {
-            cache: "no-store",
-            headers: { Authorization: `Bearer ${accessToken}` },
+    const scoreEventItem = (
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      item: any,
+      requireDateMatch = false
+    ): number => {
+      if (!item || item.status === "cancelled") return -1;
+      const sumRaw = String(item.summary || "").trim();
+      const sumNorm = normalizeTr(sumRaw);
+      const sumDistinct = extractDistinctCalendarWords(sumRaw);
+      const startDt = String(item.start?.dateTime || item.start?.date || "");
+      const dtMatch = startDt.match(/^(\d{4}-\d{2}-\d{2})(?:T(\d{2}):(\d{2}))?/);
+      const itemDate = dtMatch ? dtMatch[1] : "";
+      const itemTime =
+        dtMatch && dtMatch[2] && dtMatch[3] ? `${dtMatch[2]}:${dtMatch[3]}` : "";
+
+      if (requireDateMatch && options?.date && itemDate !== options.date) {
+        return -1;
+      }
+
+      let score = 0;
+
+      // 1. Date match bonus
+      if (options?.date && itemDate === options.date) {
+        score += options.hasExplicitDate ? 100 : 40;
+      } else if (options?.hasExplicitDate && options?.date && itemDate !== options.date) {
+        score -= 80;
+      }
+
+      // 2. Time match bonus (exact or within ±30 mins)
+      if (options?.hasExplicitTime && options?.startTime && itemTime) {
+        const [qH, qM] = options.startTime.split(":").map(Number);
+        const [iH, iM] = itemTime.split(":").map(Number);
+        const diffMins = Math.abs(qH * 60 + qM - (iH * 60 + iM));
+        if (diffMins === 0) {
+          score += 180;
+        } else if (diffMins <= 30) {
+          score += 110;
+        } else if (options.hasExplicitDate && itemDate === options.date) {
+          score -= 40;
+        }
+      }
+
+      // 3. Distinctive title words match
+      if (distinctWords.length > 0) {
+        if (distinctPhrase && sumNorm.includes(distinctPhrase)) {
+          score += 140;
+        } else {
+          let matchedCount = 0;
+          for (const w of distinctWords) {
+            if (
+              sumNorm.includes(w) ||
+              sumDistinct.some((sw) => sw.includes(w) || w.includes(sw))
+            ) {
+              matchedCount++;
+            }
           }
-        );
-        if (directRes.ok) {
-          const directEvent = await directRes.json();
-          if (directEvent && directEvent.id && directEvent.status !== "cancelled") {
-            return directEvent;
+          score += matchedCount * 65;
+          if (matchedCount === 0 && !(options?.hasExplicitTime && itemTime === options?.startTime && itemDate === options?.date)) {
+            score -= 60;
           }
+        }
+      }
+
+      return score;
+    };
+
+    // STEP 1: If a target date is available, search that specific day first!
+    if (options?.date) {
+      const dayMin = `${options.date}T00:00:00+03:00`;
+      const dayMax = `${options.date}T23:59:59+03:00`;
+      const dayUrl = `https://www.googleapis.com/calendar/v3/calendars/primary/events?timeMin=${encodeURIComponent(dayMin)}&timeMax=${encodeURIComponent(dayMax)}&singleEvents=true&orderBy=startTime&maxResults=50`;
+      const dayRes = await fetch(dayUrl, {
+        cache: "no-store",
+        headers: { Authorization: `Bearer ${accessToken}` },
+      });
+      if (dayRes.ok) {
+        const dayData = await dayRes.json();
+        const dayItems = Array.isArray(dayData.items)
+          ? dayData.items.filter(
+              // eslint-disable-next-line @typescript-eslint/no-explicit-any
+              (it: any) => it.status !== "cancelled"
+            )
+          : [];
+
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        let bestDayItem: any = null;
+        let bestDayScore = 0;
+
+        for (const item of dayItems) {
+          const sc = scoreEventItem(item, true);
+          if (sc > bestDayScore) {
+            bestDayScore = sc;
+            bestDayItem = item;
+          }
+        }
+
+        // Accept if it matched time or distinctive words on that date, or if user gave only date + generic "toplantıyı sil" and there's only 1 event on that day
+        if (bestDayItem && bestDayScore >= 90) {
+          return bestDayItem;
+        }
+        if (
+          options.hasExplicitDate &&
+          !options.hasExplicitTime &&
+          distinctWords.length === 0 &&
+          dayItems.length === 1
+        ) {
+          return dayItems[0];
         }
       }
     }
 
-    // 2. Search with q parameter
-    const searchUrl = `https://www.googleapis.com/calendar/v3/calendars/primary/events?q=${encodeURIComponent(cleanQuery)}&singleEvents=true&orderBy=startTime&maxResults=15`;
-    const res = await fetch(searchUrl, {
-      cache: "no-store",
-      headers: { Authorization: `Bearer ${accessToken}` },
-    });
-    if (res.ok) {
-      const data = await res.json();
-      if (Array.isArray(data.items) && data.items.length > 0) {
-        return data.items[data.items.length - 1];
-      }
-    }
-
-    // 3. Fallback: fetch recent & upcoming events (up to 250) and score Turkish-normalized summary
-    const minDate = new Date(Date.now() - 86400000).toISOString();
-    const listUrl = `https://www.googleapis.com/calendar/v3/calendars/primary/events?timeMin=${encodeURIComponent(minDate)}&singleEvents=true&orderBy=startTime&maxResults=250`;
+    // STEP 2: Search active window (from 2 days ago up to 60 days ahead — NEVER search 2010!)
+    const minDate = new Date(Date.now() - 2 * 86400 * 1000).toISOString();
+    const maxDate = new Date(Date.now() + 60 * 86400 * 1000).toISOString();
+    const listUrl = `https://www.googleapis.com/calendar/v3/calendars/primary/events?timeMin=${encodeURIComponent(minDate)}&timeMax=${encodeURIComponent(maxDate)}&singleEvents=true&orderBy=startTime&maxResults=250`;
     const listRes = await fetch(listUrl, {
       cache: "no-store",
       headers: { Authorization: `Bearer ${accessToken}` },
@@ -954,33 +1130,23 @@ async function findGoogleCalendarEvent(
     if (listRes.ok) {
       const listData = await listRes.json();
       const items = Array.isArray(listData.items) ? listData.items : [];
-      const words = qNorm.split(/\s+/).filter((w) => w.length >= 3);
 
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       let bestItem: any = null;
       let bestScore = 0;
 
       for (const item of items) {
-        const sumNorm = normalizeTr(String(item.summary || ""));
-        if (!sumNorm) continue;
-
-        let score = 0;
-        if (sumNorm === qNorm) {
-          score = 100;
-        } else if (sumNorm.includes(qNorm) || qNorm.includes(sumNorm)) {
-          score = 80;
-        } else if (words.length > 0) {
-          const matchedWords = words.filter((w) => sumNorm.includes(w)).length;
-          score = matchedWords * 20;
-        }
-
-        if (score >= bestScore && score > 0) {
-          bestScore = score;
+        const sc = scoreEventItem(item, false);
+        if (sc > bestScore) {
+          bestScore = sc;
           bestItem = item;
         }
       }
 
-      if (bestItem) return bestItem;
+      // Require at least 60 points (either a distinctive title word match OR date+time match)
+      if (bestItem && bestScore >= 60) {
+        return bestItem;
+      }
     }
     return null;
   } catch {
@@ -1168,7 +1334,8 @@ async function shareGoogleCalendarEvent(
   accessToken: string,
   targetQuery: string,
   rawEmailStr?: string,
-  recipientQuery?: string
+  recipientQuery?: string,
+  searchOptions?: CalendarSearchOptions
 ): Promise<{
   ok: boolean;
   htmlLink?: string;
@@ -1193,7 +1360,11 @@ async function shareGoogleCalendarEvent(
       };
     }
 
-    const existing = await findGoogleCalendarEvent(accessToken, targetQuery);
+    const existing = await findGoogleCalendarEvent(
+      accessToken,
+      targetQuery,
+      searchOptions
+    );
     if (!existing || !existing.id) {
       return {
         ok: false,
@@ -1269,7 +1440,8 @@ async function updateGoogleCalendarEvent(
     location: string;
   },
   shiftMinutes = 0,
-  hasExplicitTime = true
+  hasExplicitTime = true,
+  hasExplicitDate = false
 ): Promise<{
   ok: boolean;
   htmlLink?: string;
@@ -1282,7 +1454,13 @@ async function updateGoogleCalendarEvent(
   try {
     const existing = await findGoogleCalendarEvent(
       accessToken,
-      targetQuery || evt.title
+      targetQuery || evt.title,
+      {
+        date: evt.date,
+        startTime: evt.startTime,
+        hasExplicitDate,
+        hasExplicitTime: shiftMinutes !== 0 ? false : hasExplicitTime,
+      }
     );
     if (!existing || !existing.id) {
       return {
@@ -1369,16 +1547,36 @@ async function updateGoogleCalendarEvent(
 
 async function deleteGoogleCalendarEvent(
   accessToken: string,
-  targetQuery: string
-): Promise<{ ok: boolean; deletedTitle?: string; error?: string }> {
+  targetQuery: string,
+  searchOptions?: CalendarSearchOptions
+): Promise<{
+  ok: boolean;
+  deletedTitle?: string;
+  deletedDate?: string;
+  deletedTime?: string;
+  error?: string;
+}> {
   try {
-    const existing = await findGoogleCalendarEvent(accessToken, targetQuery);
+    const existing = await findGoogleCalendarEvent(
+      accessToken,
+      targetQuery,
+      searchOptions
+    );
     if (!existing || !existing.id) {
+      const dateHint =
+        searchOptions?.hasExplicitDate && searchOptions?.date
+          ? ` (${searchOptions.date}${searchOptions.hasExplicitTime && searchOptions.startTime ? ` ${searchOptions.startTime}` : ""})`
+          : "";
       return {
         ok: false,
-        error: `"${targetQuery}" ile eşleşen bir Google Takvim etkinliği bulunamadı.`,
+        error: `"${targetQuery}"${dateHint} ile eşleşen aktif bir Google Takvim etkinliği bulunamadı.`,
       };
     }
+
+    const startRaw = String(existing.start?.dateTime || existing.start?.date || "");
+    const dtM = startRaw.match(/^(\d{4}-\d{2}-\d{2})(?:T(\d{2}:\d{2}))?/);
+    const deletedDate = dtM ? dtM[1] : undefined;
+    const deletedTime = dtM && dtM[2] ? dtM[2] : undefined;
 
     const res = await fetch(
       `https://www.googleapis.com/calendar/v3/calendars/primary/events/${encodeURIComponent(existing.id)}`,
@@ -1393,7 +1591,12 @@ async function deleteGoogleCalendarEvent(
       return { ok: false, error: `Silme hatası (HTTP ${res.status})` };
     }
 
-    return { ok: true, deletedTitle: existing.summary || targetQuery };
+    return {
+      ok: true,
+      deletedTitle: existing.summary || targetQuery,
+      deletedDate,
+      deletedTime,
+    };
   } catch (err) {
     return {
       ok: false,
@@ -1723,6 +1926,10 @@ export async function processAssistantInput(params: {
   const creds = params.credentials || {};
   const geminiKey = creds.geminiApiKey || process.env.GEMINI_API_KEY;
   const isVoice = Boolean(params.isVoice || params.audioBase64);
+  const accessToken = await resolveGoogleAccessToken(creds);
+  const calendarContext = accessToken
+    ? await getUpcomingCalendarSummaryForPrompt(accessToken)
+    : "";
 
   let usedGemini = false;
   let transcript = params.text?.trim() || "";
@@ -1748,6 +1955,7 @@ export async function processAssistantInput(params: {
         audioBase64: params.audioBase64,
         mimeType: params.mimeType,
         apiKey: geminiKey,
+        calendarContext,
       });
 
       if (geminiResult) {
@@ -1821,8 +2029,14 @@ export async function processAssistantInput(params: {
     parsed = localParsed;
   }
 
-  const action: ActionType =
-    localParsed.action !== "create"
+  // Hard guard: if user's transcript explicitly asks to delete/cancel, never allow "create"
+  const normTranscriptForAction = normalizeTr(transcript);
+  const hasExplicitDeleteWord =
+    /\b(sil|siler|silin|iptal|kaldir|cikar)\b/.test(normTranscriptForAction);
+
+  const action: ActionType = hasExplicitDeleteWord
+    ? "delete"
+    : localParsed.action !== "create"
       ? localParsed.action
       : parsed.action || "create";
   const rawTargetQuery =
@@ -1838,7 +2052,6 @@ export async function processAssistantInput(params: {
     parsed.calendar?.attendeeEmail;
   const recipientQuery = parsed.recipientQuery || localParsed.recipientQuery;
 
-  const accessToken = await resolveGoogleAccessToken(creds);
   let syncedToGoogle = false;
   let googleSyncError: string | undefined;
 
@@ -1855,6 +2068,22 @@ export async function processAssistantInput(params: {
         location: "Google Meet",
       };
 
+    // Prefer explicit date/time extracted from transcript if Gemini didn't set it accurately
+    if (localParsed.hasExplicitDate && localParsed.calendar?.date) {
+      calData.date = localParsed.calendar.date;
+    }
+    if (localParsed.hasExplicitTime && localParsed.calendar?.startTime) {
+      calData.startTime = localParsed.calendar.startTime;
+      calData.endTime = localParsed.calendar.endTime;
+    }
+
+    const searchOptions: CalendarSearchOptions = {
+      date: calData.date,
+      startTime: calData.startTime,
+      hasExplicitDate: Boolean(localParsed.hasExplicitDate || parsed.calendar?.date),
+      hasExplicitTime: Boolean(localParsed.hasExplicitTime),
+    };
+
     if (recipientEmail && !calData.attendeeEmail) {
       calData.attendeeEmail = recipientEmail;
     }
@@ -1870,7 +2099,8 @@ export async function processAssistantInput(params: {
           accessToken,
           matchedTitle,
           recipientEmail || transcript,
-          recipientQuery
+          recipientQuery,
+          searchOptions
         );
         syncedToGoogle = shareRes.ok;
         htmlLink = shareRes.htmlLink;
@@ -1926,24 +2156,36 @@ export async function processAssistantInput(params: {
 
     if (action === "delete") {
       let deletedTitle = targetQuery || calData.title;
+      let deletedDate: string | undefined;
+      let deletedTime: string | undefined;
       if (accessToken) {
         const delRes = await deleteGoogleCalendarEvent(
           accessToken,
-          deletedTitle
+          deletedTitle,
+          searchOptions
         );
         syncedToGoogle = delRes.ok;
         if (delRes.deletedTitle) deletedTitle = delRes.deletedTitle;
+        deletedDate = delRes.deletedDate;
+        deletedTime = delRes.deletedTime;
         googleSyncError = delRes.error;
       }
 
-      const replyText =
-        `🗑️ *Google Takvim Etkinliği Silindi!*\n\n` +
-        `📌 *İptal Edilen:* ${deletedTitle}` +
-        (syncedToGoogle
-          ? `\n✅ *Gerçek Google Takvim'inizden kaldırıldı!*`
-          : googleSyncError
-            ? `\n⚠️ _${googleSyncError}_`
-            : "");
+      const replyText = syncedToGoogle
+        ? (isVoice
+            ? `🎙️ *Sesli Komut Algılandı:* _"${transcript}"_\n\n`
+            : "") +
+          `🗑️ *Google Takvim Etkinliği Silindi!*\n\n` +
+          `📌 *İptal Edilen:* ${deletedTitle}` +
+          (deletedDate
+            ? `\n📅 *Tarih / Saat:* ${deletedDate}${deletedTime ? ` | ${deletedTime}` : ""}`
+            : "") +
+          `\n✅ *Gerçek Google Takvim'inizden kaldırıldı!*`
+        : (isVoice
+            ? `🎙️ *Sesli Komut Algılandı:* _"${transcript}"_\n\n`
+            : "") +
+          `⚠️ *Google Takvim Etkinliği Bulunamadı!*\n\n` +
+          `_${googleSyncError || `"${deletedTitle}" ile eşleşen bir etkinlik bulunamadı.`}_`;
 
       return {
         transcript,
@@ -1975,7 +2217,8 @@ export async function processAssistantInput(params: {
           matchedTitle,
           calData,
           localParsed.shiftMinutes || 0,
-          Boolean(localParsed.hasExplicitTime)
+          Boolean(localParsed.hasExplicitTime),
+          Boolean(localParsed.hasExplicitDate)
         );
         syncedToGoogle = updRes.ok;
         htmlLink = updRes.htmlLink;
