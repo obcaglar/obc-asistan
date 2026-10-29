@@ -356,6 +356,9 @@ async function startWhatsAppBot() {
         lower.includes("değiştir") ||
         lower.includes("degistir") ||
         lower.includes("ertele") ||
+        lower.includes("öne çek") ||
+        lower.includes("one cek") ||
+        lower.includes("ileri al") ||
         lower.includes("sil") ||
         lower.includes("iptal") ||
         lower.includes("kaldır") ||

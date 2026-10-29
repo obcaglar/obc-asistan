@@ -113,6 +113,7 @@ function parseDateAndTimeFromTurkishText(text: string): {
   endTime: string;
   hasExplicitTime: boolean;
   hasExplicitDate: boolean;
+  shiftMinutes: number;
 } {
   const lower = text.toLocaleLowerCase("tr-TR");
   const now = getIstanbulNow();
@@ -185,6 +186,39 @@ function parseDateAndTimeFromTurkishText(text: string): {
     hasExplicitTime = true;
   }
 
+  // Detect relative shift (e.g. "1 saat öne çek", "yarım saat öne al", "2 saat ileri al / ertele")
+  let shiftMinutes = 0;
+  const shiftMatch = lower.match(
+    /(\d+|bir|iki|üç|uc|yarım|yarim)\s*(saat|dakika|dk)\s*(öne\s*çek|one\s*cek|öne\s*al|one\s*al|erkene\s*çek|erkene\s*al|geri\s*çek|geri\s*al|ileri\s*al|ileri\s*çek|sonraya\s*al|ertele)/i
+  );
+  if (shiftMatch) {
+    const rawNum = shiftMatch[1];
+    const unit = shiftMatch[2];
+    const dir = shiftMatch[3];
+    let amount = 1;
+    if (rawNum === "yarım" || rawNum === "yarim") amount = 0.5;
+    else if (rawNum === "bir") amount = 1;
+    else if (rawNum === "iki") amount = 2;
+    else if (rawNum === "üç" || rawNum === "uc") amount = 3;
+    else if (!isNaN(Number(rawNum))) amount = Number(rawNum);
+
+    const mins =
+      unit.startsWith("saat") ? Math.round(amount * 60) : Math.round(amount);
+    const isEarlier =
+      dir.includes("öne") ||
+      dir.includes("one") ||
+      dir.includes("erkene") ||
+      dir.includes("geri");
+    shiftMinutes = isEarlier ? -mins : mins;
+  }
+
+  if (hasExplicitTime && shiftMinutes !== 0) {
+    const totalMins =
+      (startHour * 60 + startMin + shiftMinutes + 24 * 60) % (24 * 60);
+    startHour = Math.floor(totalMins / 60);
+    startMin = totalMins % 60;
+  }
+
   const startTime = `${String(startHour).padStart(2, "0")}:${String(startMin).padStart(2, "0")}`;
   const endHour = (startHour + 1) % 24;
   const endTime = `${String(endHour).padStart(2, "0")}:${String(startMin).padStart(2, "0")}`;
@@ -195,6 +229,7 @@ function parseDateAndTimeFromTurkishText(text: string): {
     endTime,
     hasExplicitTime,
     hasExplicitDate,
+    shiftMinutes,
   };
 }
 
@@ -210,6 +245,8 @@ export function parseCommandLocally(
   targetQuery?: string;
   recipientEmail?: string;
   recipientQuery?: string;
+  shiftMinutes?: number;
+  hasExplicitTime?: boolean;
   calendar?: Omit<CalendarItem, "id" | "createdTime" | "source">;
   contact?: Omit<ContactItem, "id" | "addedDate">;
   note?: Omit<NoteItem, "id" | "time">;
@@ -254,9 +291,23 @@ export function parseCommandLocally(
   const isUpdate =
     !isDelete &&
     !isShare &&
-    (/\b(güncelle|guncelle|değiştir|degistir|düzenle|duzenle|ertele|taşı|tasi)\b/i.test(
-      lower
-    ) ||
+    (lower.includes("güncelle") ||
+      lower.includes("guncelle") ||
+      lower.includes("değiştir") ||
+      lower.includes("degistir") ||
+      lower.includes("düzenle") ||
+      lower.includes("duzenle") ||
+      lower.includes("ertele") ||
+      lower.includes("taşı") ||
+      lower.includes("tasi") ||
+      lower.includes("öne çek") ||
+      lower.includes("one cek") ||
+      lower.includes("öne al") ||
+      lower.includes("one al") ||
+      lower.includes("erkene") ||
+      lower.includes("ileri al") ||
+      lower.includes("geri al") ||
+      lower.includes("sonraya al") ||
       lower.startsWith("!rehber güncelle") ||
       lower.startsWith("!kisi güncelle") ||
       lower.startsWith("!toplanti güncelle") ||
@@ -367,8 +418,13 @@ export function parseCommandLocally(
     lower.includes("takvim") ||
     isShare
   ) {
-    const { dateStr, startTime, endTime } =
-      parseDateAndTimeFromTurkishText(text);
+    const {
+      dateStr,
+      startTime,
+      endTime,
+      hasExplicitTime,
+      shiftMinutes,
+    } = parseDateAndTimeFromTurkishText(text);
 
     const emailMatches =
       text.match(/[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/g) || [];
@@ -401,12 +457,22 @@ export function parseCommandLocally(
         /\b(yarın|yarin|bugün|bugun|pazartesi|salı|sali|çarşamba|carsamba|perşembe|persembe|cuma|cumartesi|pazar)\b/gi,
         ""
       )
-      .replace(/\bsaat\s*\d{1,2}[:.]\d{2}('[a-zçğıöşü]+)?/gi, "")
-      .replace(/\b\d{1,2}[:.]\d{2}('[a-zçğıöşü]+)?/g, "")
+      .replace(/\bsaat\s*\d{1,2}[:.]\d{2}(\s*['’]?[a-zçğıöşü]+)?/gi, "")
+      .replace(/\b\d{1,2}[:.]\d{2}(\s*['’]?[a-zçğıöşü]+)?/gi, "")
       .replace(
-        /\b(planla|ayarla|ekle|oluştur|olustur|sil|kaldır|kaldir|iptal\s*et|iptal|güncelle|guncelle|değiştir|degistir|ertele|taşı|tasi|gönder|gonder|davet\s*et|davet|paylaş|paylas|adresine|epostasına|e-postasına|epostaya|e-postaya|kullanıcısına|kişisine|rehberdeki|ve|toplantısını|toplantisini|randevusunu|etkinliğini|görevini|gorevini|olan|toplantıyı|toplantiyi|takvimdeki|takvimden)\b/gi,
+        /(\d+|bir|iki|üç|uc|yarım|yarim)\s*(saat|dakika|dk)\s*(öne\s*çek\w*|one\s*cek\w*|öne\s*al\w*|one\s*al\w*|erkene\s*çek\w*|erkene\s*al\w*|geri\s*çek\w*|geri\s*al\w*|ileri\s*al\w*|ileri\s*çek\w*|sonraya\s*al\w*|ertele\w*)/gi,
         ""
       )
+      .replace(
+        /\b(planla|ayarla|ekle|oluştur|olustur|sil|kaldır|kaldir|iptal\s*et|iptal|güncelle|guncelle|değiştir|degistir|ertele|taşı|tasi|öne|one|çekmeni|cekmeni|çek|cek|almanı|istiyorum|lütfen|lutfen|gönder|gonder|davet\s*et|davet|paylaş|paylas|adresine|epostasına|e-postasına|epostaya|e-postaya|kullanıcısına|kişisine|rehberdeki|ve|toplantısını|toplantisini|randevusunu|etkinliğini|görevini|gorevini|olan|toplantıyı|toplantiyi|takvimdeki|takvimden)\b/gi,
+        ""
+      )
+      .replace(/toplantısını/gi, "Toplantısı")
+      .replace(/toplantisini/gi, "Toplantısı")
+      .replace(/randevusunu/gi, "Randevusu")
+      .replace(/etkinliğini/gi, "Etkinliği")
+      .replace(/görevini/gi, "Görevi")
+      .replace(/[?.,!]+/g, "")
       .replace(/\s+/g, " ")
       .trim();
 
@@ -430,6 +496,8 @@ export function parseCommandLocally(
       targetQuery: title,
       recipientEmail: recipientEmail || undefined,
       recipientQuery: recipientQuery || undefined,
+      shiftMinutes,
+      hasExplicitTime,
       calendar: {
         title,
         date: dateStr,
@@ -567,7 +635,7 @@ Kurallar:
 1. "action" alanı:
    - Yeni etkinlik/toplantı/görev veya kişi ekleme/planlama ise: "create" (Eğer yeni eklerken aynı zamanda bir e-postaya/kişiye gönderilmesi isteniyorsa yine "create" seç ve "recipientEmail" / "recipientQuery" alanlarını doldur).
    - Takvimde MEVCUT olan bir etkinliği veya görevi başka bir kullanıcıya/e-postaya gönderme/davet etme/paylaşma ise ("!toplanti gönder ...", "... toplantısını ali@gmail.com adresine gönder"): "share"
-   - Mevcut bir toplantıyı veya kişiyi güncelleme/değiştirme/erteleme ise: "update"
+   - Mevcut bir toplantıyı veya kişiyi güncelleme/değiştirme/erteleme/öne çekme/ileri alma ise: "update" (Eğer kullanıcı "15:30'daki toplantıyı 1 saat öne çek" derse yeni startTime değerini 1 saat çıkararak "14:30", endTime değerini "15:30" olarak hesapla!)
    - Mevcut bir toplantıyı veya kişiyi silme/kaldırma/iptal etme ise: "delete"
 2. "targetQuery" alanı: "update", "delete" veya "share" işlemlerinde Google Takvim veya Google Rehber'de aranacak mevcut toplantı/görev başlığı veya kişi ismidir.
 3. Mesaj "!rehber", "!kisi", "rehber", "kişi", "numara" içeriyorsa (ve bir toplantıyı/görevi birine gönderme komutu değilse) intent KESİNLİKLE "contact" olmalıdır.
@@ -1003,11 +1071,16 @@ async function updateGoogleCalendarEvent(
     endTime: string;
     attendee: string;
     location: string;
-  }
+  },
+  shiftMinutes = 0,
+  hasExplicitTime = true
 ): Promise<{
   ok: boolean;
   htmlLink?: string;
   matchedTitle?: string;
+  finalDate?: string;
+  finalStartTime?: string;
+  finalEndTime?: string;
   error?: string;
 }> {
   try {
@@ -1022,10 +1095,33 @@ async function updateGoogleCalendarEvent(
       };
     }
 
-    const startDateTime = `${evt.date}T${evt.startTime}:00+03:00`;
-    const endDateTime = `${evt.date}T${evt.endTime}:00+03:00`;
-    const newSummary =
-      evt.title && evt.title.length > 2 ? evt.title : existing.summary;
+    let finalDate = evt.date;
+    let finalStartTime = evt.startTime;
+    let finalEndTime = evt.endTime;
+
+    // If user asked for a relative shift without stating the base clock time, shift existing.start.dateTime
+    if (shiftMinutes !== 0 && !hasExplicitTime && existing.start?.dateTime) {
+      const dtMatch = String(existing.start.dateTime).match(
+        /^(\d{4}-\d{2}-\d{2})T(\d{2}):(\d{2})/
+      );
+      if (dtMatch) {
+        finalDate = dtMatch[1];
+        const baseH = parseInt(dtMatch[2], 10);
+        const baseM = parseInt(dtMatch[3], 10);
+        const totalMins =
+          (baseH * 60 + baseM + shiftMinutes + 24 * 60) % (24 * 60);
+        const newH = Math.floor(totalMins / 60);
+        const newM = totalMins % 60;
+        finalStartTime = `${String(newH).padStart(2, "0")}:${String(newM).padStart(2, "0")}`;
+        finalEndTime = `${String((newH + 1) % 24).padStart(2, "0")}:${String(newM).padStart(2, "0")}`;
+      }
+    }
+
+    const startDateTime = `${finalDate}T${finalStartTime}:00+03:00`;
+    const endDateTime = `${finalDate}T${finalEndTime}:00+03:00`;
+    const newSummary = String(existing.summary || evt.title)
+      .replace(/Toplantısını$/i, "Toplantısı")
+      .replace(/Randevusunu$/i, "Randevusu");
 
     const res = await fetch(
       `https://www.googleapis.com/calendar/v3/calendars/primary/events/${encodeURIComponent(existing.id)}`,
@@ -1063,6 +1159,9 @@ async function updateGoogleCalendarEvent(
       ok: true,
       htmlLink: data.htmlLink,
       matchedTitle: existing.summary || newSummary,
+      finalDate,
+      finalStartTime,
+      finalEndTime,
     };
   } catch (err) {
     return {
@@ -1479,7 +1578,10 @@ export async function processAssistantInput(params: {
     parsed = localParsed;
   }
 
-  const action: ActionType = parsed.action || localParsed.action || "create";
+  const action: ActionType =
+    localParsed.action !== "create"
+      ? localParsed.action
+      : parsed.action || "create";
   const targetQuery =
     parsed.targetQuery ||
     localParsed.targetQuery ||
@@ -1612,17 +1714,31 @@ export async function processAssistantInput(params: {
     }
 
     if (action === "update") {
+      if (
+        localParsed.shiftMinutes &&
+        localParsed.hasExplicitTime &&
+        localParsed.calendar
+      ) {
+        calData.startTime = localParsed.calendar.startTime;
+        calData.endTime = localParsed.calendar.endTime;
+      }
+
       let htmlLink: string | undefined;
       let matchedTitle = targetQuery || calData.title;
       if (accessToken) {
         const updRes = await updateGoogleCalendarEvent(
           accessToken,
           matchedTitle,
-          calData
+          calData,
+          localParsed.shiftMinutes || 0,
+          Boolean(localParsed.hasExplicitTime)
         );
         syncedToGoogle = updRes.ok;
         htmlLink = updRes.htmlLink;
         if (updRes.matchedTitle) matchedTitle = updRes.matchedTitle;
+        if (updRes.finalDate) calData.date = updRes.finalDate;
+        if (updRes.finalStartTime) calData.startTime = updRes.finalStartTime;
+        if (updRes.finalEndTime) calData.endTime = updRes.finalEndTime;
         googleSyncError = updRes.error;
       }
 
