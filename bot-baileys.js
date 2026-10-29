@@ -419,6 +419,9 @@ async function startWhatsAppBot() {
       if (
         text.includes(BOT_INVISIBLE_MARKER) ||
         trimmedText.startsWith("🎙️") ||
+        trimmedText.includes("🎙️") ||
+        trimmedText.includes("Sesli Komut Algılandı") ||
+        trimmedText.includes("Sesli Mesaj Çözümlendi") ||
         trimmedText.startsWith("📅 *Google Takvim") ||
         trimmedText.startsWith("🔄 *Google Takvim") ||
         trimmedText.startsWith("🗑️ *Google Takvim") ||
@@ -430,7 +433,8 @@ async function startWhatsAppBot() {
         trimmedText.startsWith("📝 *Not Defterine") ||
         trimmedText.startsWith("📝 Mesajınız işlendi") ||
         trimmedText.startsWith("Anlayamadım. Lütfen") ||
-        (trimmedText.includes("📌 *Başlık:*") && trimmedText.includes("🗓️ *Tarih:*"))
+        trimmedText.includes("📌 *Başlık:*") ||
+        trimmedText.includes("🗓️ *Tarih:*")
       ) {
         processedMessageIds.add(msgId);
         lastBotReplyTimePerJid.set(jid, Date.now());
@@ -585,6 +589,12 @@ async function startWhatsAppBot() {
           `📩 Komut işleniyor (${jid}):`,
           trimmedText || `[Sesli Mesaj - ${mimeType}]`
         );
+        const envCredentials = {
+          geminiApiKey: process.env.GEMINI_API_KEY,
+          googleClientId: process.env.GOOGLE_CLIENT_ID,
+          googleClientSecret: process.env.GOOGLE_CLIENT_SECRET,
+          googleRefreshToken: process.env.GOOGLE_REFRESH_TOKEN,
+        };
         let result = null;
         try {
           const response = await axios.post(
@@ -595,6 +605,7 @@ async function startWhatsAppBot() {
               mimeType,
               isVoice,
               fromWhatsAppBot: true,
+              credentials: envCredentials,
             },
             { timeout: 22000 }
           );
@@ -610,6 +621,7 @@ async function startWhatsAppBot() {
                 mimeType,
                 isVoice,
                 fromWhatsAppBot: true,
+                credentials: envCredentials,
               },
               { timeout: 22000 }
             );

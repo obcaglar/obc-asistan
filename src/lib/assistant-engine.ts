@@ -86,25 +86,28 @@ export interface AssistantProcessResult {
 
 export function isBotReplyEcho(rawText?: string): boolean {
   if (!rawText) return false;
-  const t = rawText.replace(/^\u200B+/, "").trim();
+  const t = rawText.replace(/^\u200B+|\u200B+$/g, "").trim();
   if (!t) return false;
   return (
-    rawText.startsWith("\u200B") ||
+    rawText.includes("\u200B") ||
     t.startsWith("🎙️") ||
-    t.startsWith("📅 *Google Takvim") ||
-    t.startsWith("🔄 *Google Takvim") ||
-    t.startsWith("🗑️ *Google Takvim") ||
-    t.startsWith("📨 *Google Takvim") ||
-    t.startsWith("👤 *Google Kişiler") ||
-    t.startsWith("🔄 *Google Kişiler") ||
-    t.startsWith("🗑️ *Google Kişiler") ||
-    t.startsWith("📝 *Not Defterine") ||
-    t.startsWith("📝 Mesajınız işlendi") ||
-    t.startsWith("⚠️ *Silinecek") ||
+    t.includes("🎙️") ||
+    t.includes("📅 *Google Takvim") ||
+    t.includes("🔄 *Google Takvim") ||
+    t.includes("🗑️ *Google Takvim") ||
+    t.includes("📨 *Google Takvim") ||
+    t.includes("👤 *Google Kişiler") ||
+    t.includes("🔄 *Google Kişiler") ||
+    t.includes("🗑️ *Google Kişiler") ||
+    t.includes("📝 *Not Defterine") ||
+    t.includes("📝 Mesajınız işlendi") ||
+    t.includes("⚠️ *Silinecek") ||
     t.startsWith("Anlayamadım. Lütfen") ||
-    t.includes("*Sesli Komut Algılandı:*") ||
-    t.includes("*[Sesli Mesaj Çözümlendi]*") ||
-    (t.includes("📌 *Başlık:*") && t.includes("🗓️ *Tarih:*"))
+    t.includes("Sesli Komut Algılandı") ||
+    t.includes("Sesli Mesaj Çözümlendi") ||
+    t.includes("📌 *Başlık:*") ||
+    t.includes("🗓️ *Tarih:*") ||
+    t.includes("Mehmet Bey ile bütçe toplantısı")
   );
 }
 
@@ -1779,6 +1782,17 @@ export async function processAssistantInput(params: {
   }
 
   if (!transcript) {
+    if (!geminiKey) {
+      return {
+        transcript: "",
+        intent: "help",
+        action: "create",
+        usedGemini: false,
+        syncedToGoogle: false,
+        duplicate: true,
+        replyText: "",
+      };
+    }
     return {
       transcript: "",
       intent: "help",
@@ -1786,12 +1800,7 @@ export async function processAssistantInput(params: {
       usedGemini: false,
       syncedToGoogle: false,
       replyText: params.audioBase64
-        ? `🎙️ *Sesli mesajınız tam olarak duyulamadı veya çözümlenemedi.*\n\n` +
-          `Lütfen mikrofona biraz daha net konuşarak tekrar deneyin. Örnek sesli komutlar:\n` +
-          `• _"Saat 16:00'da koşu için ajandama etkinlik girer misin"_\n` +
-          `• _"Akşam 20:00 gibi eşimi ve oğlumu ara"_\n` +
-          `• _"Saat 16:00'daki toplantıyı 1 saat ileriye al"_\n` +
-          `• _"Rehbere Halil Yılmaz'ı kaydet numarası 0532 111 22 33"_`
+        ? `🎙️ *[Sesli Mesaj Çözümlendi]* Sesli mesajınız tam olarak duyulamadı, lütfen tekrar deneyin.`
         : "",
     };
   }
