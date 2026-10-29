@@ -13,9 +13,7 @@ function loadFreshEnv() {
       if (eqIdx > 0) {
         const key = trimmed.slice(0, eqIdx).trim();
         const val = trimmed.slice(eqIdx + 1).trim();
-        if (val && !process.env[key]) {
-          process.env[key] = val;
-        } else if (val) {
+        if (val) {
           process.env[key] = val;
         }
       }
@@ -80,7 +78,6 @@ export interface AssistantProcessResult {
   note?: NoteItem;
 }
 
-// In-memory store for recent webhook events (useful for live feedback on the dashboard)
 export const recentWebhookEvents: {
   calendars: CalendarItem[];
   contacts: ContactItem[];
@@ -106,8 +103,7 @@ function formatIsoDate(d: Date): string {
 }
 
 /**
- * Local smart Turkish NLP fallback for date, time, contact, and note extraction
- * when GEMINI_API_KEY is not configured or unreachable.
+ * Local smart Turkish NLP parser for date, time, contact, and note extraction.
  */
 export function parseCommandLocally(
   rawText: string,
@@ -118,10 +114,76 @@ export function parseCommandLocally(
   contact?: Omit<ContactItem, "id" | "addedDate">;
   note?: Omit<NoteItem, "id" | "time">;
 } {
-  const text = rawText.trim();
+  const text = rawText.replace(/^["'“”]+|["'“”]+$/g, "").trim();
   const lower = text.toLocaleLowerCase("tr-TR");
 
-  // 1. CALENDAR / MEETING
+  // 1. CONTACTS / GOOGLE PEOPLE (Check first if explicit contact keywords exist)
+  if (
+    lower.startsWith("!rehber") ||
+    lower.startsWith("!kisi") ||
+    lower.startsWith("!kişi") ||
+    lower.includes("rehbere") ||
+    lower.includes("rehber") ||
+    lower.includes("kişi ekle") ||
+    lower.includes("kişi kaydet") ||
+    lower.includes("kisi ekle") ||
+    lower.includes("numara kaydet") ||
+    lower.includes("numarayı kaydet")
+  ) {
+    const clean = text
+      .replace(
+        /^(!rehbere\s*ekle:?|!rehber:?|!kisi:?|!kişi:?|rehbere\s*kaydet:?|rehbere\s*ekle:?|kişi\s*ekle:?|kişi\s*kaydet:?|numara\s*kaydet:?)/i,
+        ""
+      )
+      .trim();
+
+    const emailMatch = clean.match(
+      /[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/
+    );
+    const email = emailMatch ? emailMatch[0].trim() : "";
+
+    const phoneMatch = clean.match(
+      /(\+90[\s-]?\d{3}[\s-]?\d{3}[\s-]?\d{2}[\s-]?\d{2}|0?5\d{2}[\s-]?\d{3}[\s-]?\d{2}[\s-]?\d{2}|\+?\d[\d\s-]{8,14}\d)/
+    );
+    const phone = phoneMatch ? phoneMatch[0].trim() : "+90 530 000 0000";
+
+    let company = "";
+    const companyMatch = clean.match(/(?:şirket|firma|kurum):?\s*([^,]+)$/i);
+    if (companyMatch) {
+      company = companyMatch[1].trim();
+    }
+
+    let name = clean
+      .replace(email, "")
+      .replace(phone, "")
+      .replace(/(?:şirket|firma|kurum):?\s*([^,]+)$/i, "")
+      .replace(
+        /\b(telefon|tel|numara|numarası|şirket|firma|mail|e-posta|eposta|ad|soyad|isim):?/gi,
+        ""
+      )
+      .replace(/[,]+/g, " ")
+      .replace(/\s+/g, " ")
+      .trim();
+
+    if (!name || name.length < 2) {
+      name = "Yeni Kişi";
+    }
+
+    return {
+      intent: "contact",
+      contact: {
+        name,
+        phone,
+        email,
+        company: company || "WhatsApp Bağlantısı",
+        notes: isVoice
+          ? "WhatsApp sesli mesaj ile Google Kişiler'e eklendi"
+          : "WhatsApp yazılı komut ile Google Kişiler'e eklendi",
+      },
+    };
+  }
+
+  // 2. CALENDAR / MEETING
   if (
     lower.startsWith("!toplanti") ||
     lower.startsWith("!toplantı") ||
@@ -131,7 +193,8 @@ export function parseCommandLocally(
     lower.includes("randevu") ||
     lower.includes("etkinlik") ||
     lower.includes("görüşme") ||
-    lower.includes("planla")
+    lower.includes("planla") ||
+    lower.includes("takvime")
   ) {
     const now = getIstanbulNow();
     const targetDate = new Date(now);
@@ -140,7 +203,7 @@ export function parseCommandLocally(
       targetDate.setDate(now.getDate() + 1);
     } else if (lower.includes("öbür gün") || lower.includes("ertesi gün")) {
       targetDate.setDate(now.getDate() + 2);
-    } else if (!lower.includes("bugün")) {
+    } else if (!lower.includes("bugün") && !lower.includes("bugun")) {
       const daysMap: Record<string, number> = {
         pazar: 0,
         pazartesi: 1,
@@ -169,7 +232,6 @@ export function parseCommandLocally(
       }
     }
 
-    // Parse explicit YYYY-MM-DD or DD.MM.YYYY if present
     let dateStr = formatIsoDate(targetDate);
     const isoMatch = text.match(/\b(20\d{2})-(\d{2})-(\d{2})\b/);
     const trDateMatch = text.match(/\b(\d{1,2})[./](\d{1,2})[./](20\d{2})\b/);
@@ -179,7 +241,6 @@ export function parseCommandLocally(
       dateStr = `${trDateMatch[3]}-${trDateMatch[2].padStart(2, "0")}-${trDateMatch[1].padStart(2, "0")}`;
     }
 
-    // Parse time (e.g., 14:30, 14.30)
     let startHour = 15;
     let startMin = 0;
     const timeMatch = text.match(/\b([01]?\d|2[0-3])[:.]([0-5]\d)\b/);
@@ -198,7 +259,6 @@ export function parseCommandLocally(
     const endHour = (startHour + 1) % 24;
     const endTime = `${String(endHour).padStart(2, "0")}:${String(startMin).padStart(2, "0")}`;
 
-    // Extract attendee if mentioned (e.g., "Ahmet Bey ile")
     let attendee = "WhatsApp Kullanıcısı";
     const attendeeMatch = text.match(
       /([A-ZÇĞİÖŞÜ][a-zçğıöşü]+(?:\s+(?:Bey|Hanım|[A-ZÇĞİÖŞÜ][a-zçğıöşü]+))?)\s+ile/
@@ -208,8 +268,14 @@ export function parseCommandLocally(
     }
 
     let title = text
-      .replace(/^(!toplanti|!toplantı|!randevu|toplantı ayarla:?|randevu ekle:?)/i, "")
-      .replace(/\b(yarın|bugün|pazartesi|salı|çarşamba|perşembe|cuma|cumartesi|pazar)\b/gi, "")
+      .replace(
+        /^(!toplanti|!toplantı|!randevu|toplantı ayarla:?|randevu ekle:?)/i,
+        ""
+      )
+      .replace(
+        /\b(yarın|yarin|bugün|bugun|pazartesi|salı|sali|çarşamba|carsamba|perşembe|persembe|cuma|cumartesi|pazar)\b/gi,
+        ""
+      )
       .replace(/\bsaat\s*\d{1,2}[:.]\d{2}('[a-zçğıöşü]+)?/gi, "")
       .replace(/\b\d{1,2}[:.]\d{2}('[a-zçğıöşü]+)?/g, "")
       .replace(/\b(planla|ayarla|ekle)\b/gi, "")
@@ -228,68 +294,9 @@ export function parseCommandLocally(
         startTime,
         endTime,
         attendee,
-        location: lower.includes("ofis") ? "Ofis Toplantı Odası" : "Google Meet",
-      },
-    };
-  }
-
-  // 2. CONTACTS / GOOGLE PEOPLE
-  if (
-    lower.startsWith("!rehber") ||
-    lower.startsWith("!kisi") ||
-    lower.startsWith("!kişi") ||
-    lower.includes("rehbere") ||
-    lower.includes("kişi ekle") ||
-    lower.includes("rehber")
-  ) {
-    const clean = text
-      .replace(/^(!rehber|!kisi|!kişi|rehbere kaydet:?|rehbere ekle:?|kişi ekle:?)/i, "")
-      .trim();
-
-    const emailMatch = clean.match(/[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/);
-    const email = emailMatch ? emailMatch[0] : "";
-
-    const phoneMatch = clean.match(
-      /(\+90\s?5\d{2}\s?\d{3}\s?\d{2}\s?\d{2}|0?5\d{2}\s?\d{3}\s?\d{2}\s?\d{2}|\+?\d{10,13})/
-    );
-    const phone = phoneMatch ? phoneMatch[0].trim() : "+90 530 000 0000";
-
-    let company = "WhatsApp Bağlantısı";
-    const companyMatch = clean.match(/şirket:?\s*([^,]+)$/i);
-    if (companyMatch) {
-      company = companyMatch[1].trim();
-    }
-
-    let name = clean
-      .replace(email, "")
-      .replace(phone, "")
-      .replace(/şirket:?\s*([^,]+)$/i, "")
-      .replace(/(telefon|şirket|mail|eposta|ad|soyad):?/gi, "")
-      .replace(/[,]+/g, " ")
-      .replace(/\s+/g, " ")
-      .trim();
-
-    if (!name || name.length < 2) {
-      name = "Yeni Bağlantı";
-    }
-
-    const finalEmail =
-      email ||
-      `${name
-        .toLocaleLowerCase("tr-TR")
-        .replace(/[^a-z0-9]/g, "")
-        .slice(0, 18) || "kisi"}@iletisim.com`;
-
-    return {
-      intent: "contact",
-      contact: {
-        name,
-        phone,
-        email: finalEmail,
-        company,
-        notes: isVoice
-          ? "Sesli mesaj ile Google Kişiler'e kaydedildi"
-          : "Yazılı WhatsApp komutuyla eklendi",
+        location: lower.includes("ofis")
+          ? "Ofis Toplantı Odası"
+          : "Google Meet",
       },
     };
   }
@@ -308,7 +315,9 @@ export function parseCommandLocally(
       noteContent = "WhatsApp üzerinden alınan hızlı not.";
     }
     const category =
-      lower.includes("sunucu") || lower.includes("ssl") || lower.includes("toplantı")
+      lower.includes("sunucu") ||
+      lower.includes("ssl") ||
+      lower.includes("toplantı")
         ? "İş / Altyapı"
         : lower.includes("market") || lower.includes("kahve")
           ? "Kişisel"
@@ -375,16 +384,35 @@ async function analyzeWithGemini(params: {
 
   const systemInstruction = `Sen Türkçe çalışan bir WhatsApp & Google Workspace Asistanısın.
 Bugünün tarihi (Europe/Istanbul): ${todayIso} (${todayDayName}).
-Kullanıcının gönderdiği metni veya ses kaydını incele ve JSON döndür:
-1. Eğer ses kaydı varsa önce tam Türkçe metne dök ("transcript" alanına yaz). Metin gönderildiyse "transcript" alanına metni olduğu gibi yaz.
-2. Kullanıcının niyetini ("intent") belirle:
-   - "calendar": Toplantı, randevu, etkinlik, görüşme planlama (Örn: !toplanti, "Yarın saat 14:30'da Ahmet Bey ile toplantı").
-   - "contact": Kişi/rehber/numara kaydetme (Örn: !rehber, "Rehbere kaydet: Avukat Selin Arslan 0532...").
-   - "note": Not alma, hatırlatma (Örn: !not, "Not al: ...").
-   - "help": Yukarıdakilerden hiçbiri değilse.
-3. "calendar" ise: title, date (YYYY-MM-DD formatında, bugünün tarihine göre hesapla), startTime (HH:mm), endTime (HH:mm, belirtilmediyse başlangıçtan 1 saat sonrası), attendee (katılımcı adı veya "WhatsApp Kullanıcısı"), location (belirtilmediyse "Google Meet") doldur.
-4. "contact" ise: name, phone, email, company, notes doldur.
-5. "note" ise: title (kısa başlık), content (tam not içeriği), category ("İş / Altyapı", "Kişisel" veya "WhatsApp Notu") doldur.`;
+Kullanıcının gönderdiği metni veya ses kaydını incele ve tam olarak şu JSON yapısını döndür:
+{
+  "transcript": "Ses kaydının veya yazılı mesajın tam Türkçe metni",
+  "intent": "calendar" | "contact" | "note" | "help",
+  "calendar": {
+    "title": "Toplantı/Etkinlik başlığı",
+    "date": "YYYY-MM-DD",
+    "startTime": "HH:mm",
+    "endTime": "HH:mm",
+    "attendee": "Katılımcı adı",
+    "location": "Google Meet"
+  },
+  "contact": {
+    "name": "Kişinin Adı Soyadı (Örn: Ali Kaya, Av. Selin Arslan)",
+    "phone": "Telefon numarası (Örn: 05321112233)",
+    "email": "Varsa e-posta adresi, yoksa boş string",
+    "company": "Varsa şirket/kurum adı, yoksa boş string",
+    "notes": "Kısa açıklama"
+  },
+  "note": {
+    "title": "Not başlığı",
+    "content": "Not içeriği",
+    "category": "İş / Altyapı | Kişisel | WhatsApp Notu"
+  }
+}
+Kurallar:
+- Mesaj "!rehber", "!kisi", "rehbere ekle", "rehbere kaydet", "kişi ekle", "numara kaydet" içeriyorsa veya bir isim ve telefon numarası veriliyorsa intent KESİNLİKLE "contact" olmalıdır ve "contact" nesnesi doldurulmalıdır!
+- Mesaj "!toplanti", "!randevu", "toplantı", "randevu", "etkinlik" içeriyorsa intent "calendar" olmalıdır ve "calendar" nesnesi doldurulmalıdır.
+- Mesaj "!not", "not al", "not et" içeriyorsa intent "note" olmalıdır ve "note" nesnesi doldurulmalıdır.`;
 
   const parts: Array<Record<string, unknown>> = [{ text: systemInstruction }];
   if (params.audioBase64) {
@@ -423,16 +451,28 @@ Kullanıcının gönderdiği metni veya ses kaydını incele ve JSON döndür:
   if (!rawJson) return null;
 
   try {
-    return JSON.parse(rawJson);
+    const obj = JSON.parse(rawJson);
+    // Normalize if Gemini placed contact fields at root
+    if (
+      (obj.intent === "contact" || obj.intent === "rehber") &&
+      !obj.contact &&
+      (obj.name || obj.phone)
+    ) {
+      obj.intent = "contact";
+      obj.contact = {
+        name: obj.name || "Yeni Kişi",
+        phone: obj.phone || "",
+        email: obj.email || "",
+        company: obj.company || "",
+        notes: obj.notes || "",
+      };
+    }
+    return obj;
   } catch {
     return null;
   }
 }
 
-/**
- * Resolves a valid Google OAuth2 Access Token either from a client-supplied token
- * or by exchanging the server/wizard GOOGLE_REFRESH_TOKEN.
- */
 export async function resolveGoogleAccessToken(
   creds: AssistantCredentials
 ): Promise<string | null> {
@@ -538,18 +578,29 @@ async function createGooglePersonContact(
   }
 ): Promise<{ ok: boolean; error?: string }> {
   try {
+    const nameParts = cnt.name.trim().split(/\s+/);
+    const givenName =
+      nameParts.length > 1
+        ? nameParts.slice(0, -1).join(" ")
+        : nameParts[0] || "Yeni Kişi";
+    const familyName =
+      nameParts.length > 1 ? nameParts[nameParts.length - 1] : "";
+
     const res = await fetch(
-      "https://people.googleapis.com/v1/people:createContact",
+      "https://people.googleapis.com/v1/people:createContact?personFields=names,phoneNumbers,emailAddresses,organizations,biographies",
       {
         method: "POST",
+        cache: "no-store",
         headers: {
           Authorization: `Bearer ${accessToken}`,
           "Content-Type": "application/json",
         },
         body: JSON.stringify({
-          names: [{ givenName: cnt.name }],
-          phoneNumbers: [{ value: cnt.phone, type: "mobile" }],
-          emailAddresses: cnt.email ? [{ value: cnt.email, type: "work" }] : [],
+          names: [{ givenName, familyName }],
+          phoneNumbers: cnt.phone ? [{ value: cnt.phone, type: "mobile" }] : [],
+          emailAddresses: cnt.email
+            ? [{ value: cnt.email, type: "work" }]
+            : [],
           organizations: cnt.company ? [{ name: cnt.company }] : [],
           biographies: cnt.notes ? [{ value: cnt.notes }] : [],
         }),
@@ -557,10 +608,10 @@ async function createGooglePersonContact(
     );
 
     if (!res.ok) {
-      const data = await res.json();
+      const rawText = await res.text();
       return {
         ok: false,
-        error: data?.error?.message || "Google People API hatası",
+        error: `HTTP ${res.status}: ${rawText.slice(0, 200)}`,
       };
     }
 
@@ -573,9 +624,6 @@ async function createGooglePersonContact(
   }
 }
 
-/**
- * Main entry point for processing a text or voice command from either the Web Simulator or the Meta Webhook.
- */
 export async function processAssistantInput(params: {
   text?: string;
   audioBase64?: string;
@@ -625,11 +673,20 @@ export async function processAssistantInput(params: {
     }
   }
 
-  if (!parsed) {
-    if (!transcript) {
-      transcript = "Yarın saat 15:30'da Mehmet Bey ile bütçe toplantısı ayarla";
-    }
-    parsed = parseCommandLocally(transcript, isVoice);
+  // Always fallback to local parser if Gemini didn't extract the required intent object!
+  const localParsed = parseCommandLocally(
+    transcript || "Yarın saat 15:30'da Mehmet Bey ile bütçe toplantısı ayarla",
+    isVoice
+  );
+
+  if (
+    !parsed ||
+    parsed.intent === "help" ||
+    (parsed.intent === "calendar" && !parsed.calendar?.title) ||
+    (parsed.intent === "contact" && !parsed.contact?.name) ||
+    (parsed.intent === "note" && !parsed.note?.content)
+  ) {
+    parsed = localParsed;
   }
 
   const accessToken = await resolveGoogleAccessToken(creds);
@@ -699,7 +756,7 @@ export async function processAssistantInput(params: {
       id: "cnt-" + Date.now(),
       name: parsed.contact.name,
       phone: parsed.contact.phone,
-      email: parsed.contact.email,
+      email: parsed.contact.email || "",
       company: parsed.contact.company || "WhatsApp Bağlantısı",
       notes:
         parsed.contact.notes ||
@@ -718,7 +775,7 @@ export async function processAssistantInput(params: {
       `👤 *Google Kişiler'e Başarıyla Kaydedildi!*\n\n` +
       `📇 *İsim:* ${contact.name}\n` +
       `📞 *Telefon:* ${contact.phone}\n` +
-      `✉️ *E-posta:* ${contact.email}\n` +
+      (contact.email ? `✉️ *E-posta:* ${contact.email}\n` : "") +
       `🏢 *Şirket:* ${contact.company}${syncTag}`;
 
     return {
@@ -764,7 +821,7 @@ export async function processAssistantInput(params: {
     replyText:
       `Anlayamadım. Lütfen şu formatları deneyin:\n\n` +
       `• 📅 *Toplantı:* "Yarın saat 14:00'te Tasarım Toplantısı"\n` +
-      `• 👤 *Kişi:* "Rehbere ekle: Ali Vural 05441234567"\n` +
+      `• 👤 *Kişi:* "!rehber Ali Vural 05441234567"\n` +
       `• 📝 *Not:* "!not Marketten süt alınacak"\n\n` +
       `Ya da mikrofona basarak sesli konuşabilirsiniz!`,
   };

@@ -212,7 +212,7 @@ Kullanıcının mesajını veya sesini incele ve JSON döndür:
     if (accessToken) {
       try {
         await axios.post(
-          "https://people.googleapis.com/v1/people:createContact",
+          "https://people.googleapis.com/v1/people:createContact?personFields=names,phoneNumbers,emailAddresses,organizations,biographies",
           {
             names: [{ givenName: cnt.name }],
             phoneNumbers: [{ value: cnt.phone, type: "mobile" }],
@@ -323,17 +323,22 @@ async function startWhatsAppBot() {
         continue;
       }
 
-      const isSelfChat =
-        m.key.fromMe &&
-        (text.startsWith("!") ||
-          text.toLowerCase().includes("toplantı") ||
-          text.toLowerCase().includes("randevu") ||
-          text.toLowerCase().includes("rehbere") ||
-          text.toLowerCase().includes("not al"));
+      const lower = text.toLocaleLowerCase("tr-TR");
+      const isCommand =
+        Boolean(m.message.audioMessage) ||
+        lower.startsWith("!") ||
+        lower.includes("toplantı") ||
+        lower.includes("toplanti") ||
+        lower.includes("randevu") ||
+        lower.includes("etkinlik") ||
+        lower.includes("rehber") ||
+        lower.includes("kişi") ||
+        lower.includes("kisi") ||
+        lower.includes("numara") ||
+        lower.includes("not al") ||
+        lower.includes("not et");
 
-      if (m.key.fromMe && !isSelfChat && !m.message.audioMessage) {
-        continue;
-      }
+      if (!isCommand) continue;
 
       let audioBase64 = undefined;
       let mimeType = undefined;
@@ -351,23 +356,6 @@ async function startWhatsAppBot() {
       }
 
       if (!text && !audioBase64) continue;
-
-      const lower = text.toLocaleLowerCase("tr-TR");
-      const isCommand =
-        isVoice ||
-        lower.startsWith("!toplanti") ||
-        lower.startsWith("!toplantı") ||
-        lower.startsWith("!randevu") ||
-        lower.startsWith("!rehber") ||
-        lower.startsWith("!kisi") ||
-        lower.startsWith("!kişi") ||
-        lower.startsWith("!not") ||
-        lower.includes("toplantı") ||
-        lower.includes("randevu") ||
-        lower.includes("rehbere") ||
-        lower.includes("not al");
-
-      if (!isCommand) continue;
 
       try {
         console.log(`📩 Komut işleniyor (${jid}):`, text || "[Sesli Mesaj]");
