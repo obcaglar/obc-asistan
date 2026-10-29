@@ -6,11 +6,9 @@ services:
     buildCommand: npm install
     startCommand: node bot-baileys.js
     envVars:
-      - key: GEMINI_API_KEY
-        sync: false
-      - key: GOOGLE_CLIENT_ID
-        sync: false
-      - key: GOOGLE_CLIENT_SECRET
-        sync: false
-      - key: GOOGLE_REFRESH_TOKEN
-        sync: false
+      - key: ASSISTANT_API_URL
+        value: https://obc-asistan.vercel.app/api/assistant
+      - key: VERCEL_API_URL
+        value: https://obc-asistan.vercel.app/api/assistant
+      - key: WHATSAPP_ASSISTANT_NUMBER
+        value: "+905491007729"

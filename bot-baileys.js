@@ -463,16 +463,23 @@ async function startWhatsAppBot() {
 }
 
 // Start lightweight HTTP server for Cloud Health Checks & QR Code viewing (Render / Railway / Koyeb)
-const CLOUD_PORT = process.env.BOT_PORT || process.env.PORT || 3001;
+const CLOUD_PORT = Number(process.env.PORT || process.env.BOT_PORT || 3001);
 if (String(CLOUD_PORT) !== "3000" || process.env.RENDER || process.env.RAILWAY_ENVIRONMENT) {
   http
     .createServer((req, res) => {
       res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
       res.end(latestQrHtml || "WhatsApp Bot Çalışıyor");
     })
-    .listen(CLOUD_PORT, () => {
+    .listen(CLOUD_PORT, "0.0.0.0", () => {
       console.log(`🌐 QR & Health Sunucusu Port ${CLOUD_PORT} üzerinde aktif.`);
     });
+}
+
+// Self-keepalive ping for Render 24/7 operation
+if (process.env.RENDER_EXTERNAL_URL) {
+  setInterval(() => {
+    axios.get(process.env.RENDER_EXTERNAL_URL).catch(() => {});
+  }, 10 * 60 * 1000);
 }
 
 startWhatsAppBot();
