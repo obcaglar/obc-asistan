@@ -321,7 +321,7 @@ export function parseCommandLocally(
   const lower = text.toLocaleLowerCase("tr-TR");
 
   const isDelete =
-    /\b(sil|kaldır|kaldir|iptal\s*et|iptal)\b/i.test(lower) ||
+    /\b(sil|siler|silin|kaldır|kaldir|iptal\s*et|iptal|çıkar|cikar)\b/i.test(lower) ||
     lower.startsWith("!rehber sil") ||
     lower.startsWith("!kisi sil") ||
     lower.startsWith("!toplanti sil") ||
@@ -330,8 +330,14 @@ export function parseCommandLocally(
     lower.startsWith("!görev sil") ||
     lower.startsWith("!randevu sil");
 
+  const hasCreateVerb =
+    /\b(ekle\w*|oluştur\w*|olustur\w*|ayarla\w*|planla\w*|gir\b|girip\b|girer\s*misin\w*|girermisin\w*|girelim\b|girmesini\b|girmek\b|kaydet\w*|kaydedip\b|koy\w*|yaz\w*|aç\b|ac\b)\b/i.test(
+      lower
+    );
+
   const isShare =
     !isDelete &&
+    !hasCreateVerb &&
     (lower.startsWith("!toplanti gönder") ||
       lower.startsWith("!toplanti gonder") ||
       lower.startsWith("!toplantı gönder") ||
@@ -349,13 +355,13 @@ export function parseCommandLocally(
       lower.startsWith("!takvim paylaş") ||
       lower.startsWith("!etkinlik gönder") ||
       lower.startsWith("!etkinlik gonder") ||
-      (!/\b(ekle|oluştur|olustur|ayarla|planla)\b/i.test(lower) &&
-        /\b(gönder|gonder|davet\s*et|davetiye\s*gönder|paylaş|paylas|mail\s*at|epostaya\s*gönder|e-postaya\s*gönder)\b/i.test(
-          lower
-        )));
+      /\b(gönder\w*|gonder\w*|davet\s*et\w*|davetiye\s*gönder\w*|paylaş\w*|paylas\w*|mail\s*at\w*|epostaya\s*gönder\w*|e-postaya\s*gönder\w*)\b/i.test(
+        lower
+      ));
 
   const isUpdate =
     !isDelete &&
+    !hasCreateVerb &&
     !isShare &&
     (lower.includes("güncelle") ||
       lower.includes("guncelle") ||
@@ -526,13 +532,26 @@ export function parseCommandLocally(
       attendee = attendeeMatch[1].trim();
     }
 
-    // Check if user specified a recipient person name (e.g. "Ahmet Yılmaz'a gönder" or "rehberdeki Ali Kaya'ya gönder")
+    // Check if user specified a recipient person name (e.g. "eşim Esmeray'ın gmail hesabına gönder", "Esmeray'a gönder", "rehberdeki Ali Kaya'ya gönder")
     let recipientQuery = "";
-    const toPersonMatch = text.match(
-      /(?:rehberdeki\s+)?([A-ZÇĞİÖŞÜa-zçğıöşü]+(?:\s+[A-ZÇĞİÖŞÜa-zçğıöşü]+)?)['’]?(?:a|e|ya|ye)\s+(?:gönder|gonder|davet|paylaş|paylas|ilet)/i
+    const possessivePersonMatch = text.match(
+      /(?:eşim|esim|karım|kocam|oğlum|kızım|annem|babam|kardeşim|arkadaşım|rehberdeki)?\s*([A-ZÇĞİÖŞÜa-zçğıöşü]+(?:\s+[A-ZÇĞİÖŞÜa-zçğıöşü]+)?)['’]?(?:ın|in|un|ün|nın|nin|nun|nün)\s+(?:gmail|mail\w*|e-?posta\w*|eposta\w*|hesab\w*|adres\w*)/i
     );
-    if (toPersonMatch) {
-      recipientQuery = toPersonMatch[1].trim();
+    const toPersonMatch = text.match(
+      /(?:eşim|esim|karım|kocam|oğlum|kızım|annem|babam|kardeşim|arkadaşım|rehberdeki)?\s*([A-ZÇĞİÖŞÜa-zçğıöşü]+(?:\s+[A-ZÇĞİÖŞÜa-zçğıöşü]+)?)['’]?(?:a|e|ya|ye)\s+(?:gönder|gonder|davet|paylaş|paylas|ilet)/i
+    );
+    const rawPersonCandidate = possessivePersonMatch
+      ? possessivePersonMatch[1]
+      : toPersonMatch
+        ? toPersonMatch[1]
+        : "";
+    if (rawPersonCandidate) {
+      recipientQuery = rawPersonCandidate
+        .replace(
+          /\b(eşim|esim|karım|kocam|oğlum|kızım|annem|babam|kardeşim|arkadaşım|rehberdeki|gmail|mail\w*|e-?posta\w*|eposta\w*|hesab\w*|adres\w*)\b/gi,
+          ""
+        )
+        .trim();
     }
 
     // If user put the meeting name in quotes (e.g. '16:00 daki "yapmaya cik" toplantısını 1 saat ileriye al'), extract quoted title!
@@ -541,6 +560,14 @@ export function parseCommandLocally(
     let title = text
       .replace(
         /^(!toplanti\s*gönder:?|!toplanti\s*gonder:?|!toplantı\s*gönder:?|!toplanti\s*davet:?|!toplantı\s*davet:?|!toplanti\s*paylaş:?|!gorev\s*gönder:?|!gorev\s*gonder:?|!görev\s*gönder:?|!takvim\s*gönder:?|!takvim\s*paylaş:?|!etkinlik\s*gönder:?|!toplanti\s*sil:?|!toplantı\s*sil:?|!takvim\s*sil:?|!takvimden\s*sil:?|!randevu\s*sil:?|!gorev\s*sil:?|!görev\s*sil:?|!toplanti\s*iptal:?|!toplantı\s*iptal:?|!toplanti\s*güncelle:?|!toplantı\s*güncelle:?|!takvim\s*güncelle:?|!takvim\s*guncelle:?|!randevu\s*güncelle:?|!gorev\s*güncelle:?|!görev\s*güncelle:?|!takvime\s*ekle:?|!toplanti:?|!toplantı:?|!randevu:?|!gorev:?|!görev:?|!takvim:?|!etkinlik:?|!ajanda:?|toplantı\s*ayarla:?|randevu\s*ekle:?|takvimden\s*sil:?|takvimde\s*güncelle:?)/i,
+        ""
+      )
+      .replace(
+        /\b(?:etkinliği|etkinligi|etkinlik|toplantısı|toplantisi|toplantı|randevusu|randevu|görevi|gorevi|görev)?\s*(?:girip|ekleyip|oluşturup|olusturup|kaydedip|planlayıp|ayarlayıp)\s+.*$/i,
+        ""
+      )
+      .replace(
+        /\b(?:eşim|esim|karım|kocam|oğlum|kızım|annem|babam|kardeşim|arkadaşım|rehberdeki)\s+.*?(?:gönder\w*|gonder\w*|davet\w*|paylaş\w*|paylas\w*|ilet\w*).*$/i,
         ""
       )
       .replace(/[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/g, "")
@@ -555,7 +582,7 @@ export function parseCommandLocally(
         ""
       )
       .replace(
-        /\b(ajandama|ajandaya|ajandada|ajandadan|ajanda|takvimime|takvimdeki|takvimden|takvime|takvim|için|icin|gibi|etkinlik|etkinliği|etkinligi|girer\s*misin\w*|girermisin\w*|ekler\s*misin\w*|eklermisin\w*|gir|planla|ayarla|ekle|oluştur|olustur|kaydet|sil|kaldır|kaldir|iptal\s*et|iptal|güncelle|guncelle|değiştir|degistir|ertele|taşı|tasi|öne|one|ileriye|ileri|geriye|geri|sonraya|çekmeni|cekmeni|çek|cek|almanı|al|istiyorum|lütfen|lutfen|gönder|gonder|davet\s*et|davet|paylaş|paylas|adresine|epostasına|e-postasına|epostaya|e-postaya|kullanıcısına|kişisine|rehberdeki|toplantısını|toplantisini|randevusunu|etkinliğini|görevini|gorevini|olan|toplantıyı|toplantiyi|daki|deki|taki|teki)\b/gi,
+        /\b(ajandama|ajandaya|ajandada|ajandadan|ajanda|takvimime|takvimdeki|takvimden|takvime|takvim|için|icin|gibi|etkinlik|etkinliği|etkinligi|girer\s*misin\w*|girermisin\w*|ekler\s*misin\w*|eklermisin\w*|girip|gir|planla|ayarla|ekleyip|ekle|oluşturup|oluştur|olustur|kaydedip|kaydet|sil|kaldır|kaldir|iptal\s*et|iptal|güncelle|guncelle|değiştir|degistir|ertele|taşı|tasi|öne|one|ileriye|ileri|geriye|geri|sonraya|çekmeni|cekmeni|çek|cek|almanı|al|istiyorum|lütfen|lutfen|gönder\w*|gonder\w*|davet\s*et|davet|paylaş\w*|paylas\w*|adresine|hesabına|hesabina|gmail|mailine|epostasına|e-postasına|epostaya|e-postaya|kullanıcısına|kişisine|eşim|esim|rehberdeki|toplantısını|toplantisini|randevusunu|etkinliğini|görevini|gorevini|olan|toplantıyı|toplantiyi|daki|deki|taki|teki)\b/gi,
         ""
       )
       .replace(/["'“”«»]/g, "")
@@ -574,7 +601,7 @@ export function parseCommandLocally(
 
     if (recipientQuery && title.includes(recipientQuery)) {
       title = title
-        .replace(new RegExp(`${recipientQuery}['’]?[aey]+`, "gi"), "")
+        .replace(new RegExp(`${recipientQuery}['’]?[a-zçğıöşü]*`, "gi"), "")
         .replace(recipientQuery, "")
         .trim();
     }
@@ -704,26 +731,26 @@ async function analyzeWithGemini(params: {
   const todayDayName = dayNames[now.getDay()];
 
   const calendarScheduleBlock = params.calendarContext
-    ? `\nKULLANICININ GÜNCEL GOOGLE TAKVİM (AJANDA) LİSTESİ (Silme/Güncelleme/Paylaşma işlemlerinde gün, saat ve isim eşleştirmesi için bu gerçek listeyi baz al):\n${params.calendarContext}\n`
+    ? `\nKULLANICININ GÜNCEL GOOGLE TAKVİM (AJANDA) LİSTESİ (Sadece mevcut bir etkinliği silme, saatini güncelleme veya mevcut bir etkinliği paylaşma işlemlerinde bu listeyi baz al):\n${params.calendarContext}\n`
     : "";
 
   const systemInstruction = `Sen Türkçe çalışan çok hassas bir WhatsApp & Google Workspace Asistanısın.
-Bugünün tarihi (Europe/Istanbul): ${todayIso} (${todayDayName}). Yarının tarihi: ${tomorrowIso}.${calendarScheduleBlock}
+Bugünün tarihi (Europe/Istanbul): ${todayIso} (${todayDayName}), şu anki saat: ${String(now.getHours()).padStart(2, "0")}:${String(now.getMinutes()).padStart(2, "0")}. Yarının tarihi: ${tomorrowIso}.${calendarScheduleBlock}
 Kullanıcının gönderdiği metni veya Türkçe ses kaydını (Voice Message) çok dikkatli dinle/incele ve tam olarak şu JSON yapısını döndür:
 {
-  "transcript": "Ses kaydının veya yazılı mesajın tam ve doğru Türkçe metni (Örn: saatleri 16:00 veya 14:30, telefonları 05321112233, e-postaları ali@gmail.com biçiminde yaz)",
+  "transcript": "Ses kaydının veya yazılı mesajın tam ve doğru Türkçe metni (Örn: saatleri 08:30, 16:00 veya 14:30, telefonları 05321112233 biçiminde yaz)",
   "intent": "calendar" | "contact" | "note" | "help",
   "action": "create" | "update" | "delete" | "share",
-  "targetQuery": "Güncellenecek, silinecek veya başka birine gönderilecek toplantının/etkinliğin/kişinin tam adı (Eğer yukarıdaki Güncel Google Takvim Listesinde o gün ve saatte bir etkinlik varsa, o etkinliğin listedeki TAM BAŞLIĞINI yaz!)",
-  "recipientEmail": "Etkinlik veya görev bir e-posta adresine gönderilecekse/davet edilecekse alıcı e-posta adresi (Örn: 'ahmet@ornek.com'), yoksa boş string",
-  "recipientQuery": "Etkinlik veya görev rehberdeki bir kişiye gönderilecekse o kişinin adı (Örn: 'Ahmet Yılmaz'), yoksa boş string",
+  "targetQuery": "Sadece silme/güncelleme/mevcut etkinliği paylaşma ise hedef etkinliğin adı; yeni etkinlik ekleme ise yeni etkinliğin temiz başlığı",
+  "recipientEmail": "Kullanıcı mesajda AÇIKÇA bir e-posta adresi söylediyse yaz (Örn: 'ali@gmail.com'); sadece 'Esmeray'ın gmail hesabına gönder' dediyse ASLA e-posta tahmini yapma, BOŞ STRING ('') bırak!",
+  "recipientQuery": "Etkinlik veya görev bir kişiye gönderilecekse/davet edilecekse SADECE o kişinin adı (Örn: 'eşim Esmeray'ın gmail hesabına gönder' -> 'Esmeray', 'Ahmet Yılmaz'a gönder' -> 'Ahmet Yılmaz'), yoksa boş string",
   "calendar": {
-    "title": "Kısa, temiz ve net Etkinlik/Toplantı/Görev başlığı (Silme veya güncelleme ise Güncel Google Takvim Listesindeki eşleşen etkinliğin tam başlığı; yeni ekleme ise 'ajandama etkinlik girer misin', 'takvime ekle', saati veya alıcı e-postasını başlığa yazma!)",
+    "title": "Kısa, temiz ve net Etkinlik/Toplantı/Görev başlığı (Örn: 'Kahvaltı ve Okula Gidiş' — başlığa asla 'etkinliği girip', 'eşim Esmeray'ın gmail hesabına gönder' veya saati yazma!)",
     "date": "YYYY-MM-DD",
     "startTime": "HH:mm",
     "endTime": "HH:mm",
-    "attendee": "Katılımcı adı veya e-posta adresi",
-    "attendeeEmail": "Varsa davet gönderilecek e-posta adresi",
+    "attendee": "Katılımcı adı (Örn: 'Esmeray')",
+    "attendeeEmail": "Sadece kullanıcı harf harf e-posta söylediyse yaz, yoksa boş string",
     "location": "Google Meet"
   },
   "contact": {
@@ -740,17 +767,20 @@ Kullanıcının gönderdiği metni veya Türkçe ses kaydını (Voice Message) �
   }
 }
 Kurallar:
-1. SİLME ("delete") VE GÜNCELLEME ("update") KESİN KURALI:
-   - Mesajda "sil", "siler misin", "iptal", "iptal et", "kaldır", "çıkar", "ajandamdan sil", "takvimden sil" geçiyorsa "action" KESİNLİKLE "delete" olmalıdır! ASLA "create" yapma ve yeni etkinlik ekleme!
-   - Kullanıcı silmek veya güncellemek istediği etkinliğin gününü ve saatini söylediğinde (Örn: "Yarın saat 16:00'daki görüşmeyi sil", "Bugün 14:30'daki toplantıyı sil", "Yarın 17:00'deki yapmaya çık etkinliğini sil"), yukarıdaki KULLANICININ GÜNCEL GOOGLE TAKVİM LİSTESİ'ne bak:
-     • O tarih ve saatteki etkinliğin tam başlığını "targetQuery" ve "calendar.title" alanına yaz!
-     • Kullanıcının söylediği tarihi ("bugün" -> ${todayIso}, "yarın" -> ${tomorrowIso}) "calendar.date" alanına, saati ise "calendar.startTime" alanına (HH:mm formatında) mutlaka yaz!
-2. SESLİ KOMUT (VOICE) ÇÖZÜMLEME VE HASSASİYET KURALLARI:
-   - Sesli söylenen saatleri 24 saatlik HH:mm formatına çevir (Örn: "iki buçuk / on dört otuz" -> "14:30", "üç buçuk" -> "15:30", "dörtte / on altıda" -> "16:00", "beşte / on yedide" -> "17:00", "akşam sekiz / yirmi" -> "20:00").
-   - Kullanıcı sesli konuşurken "Crater", "Lunixi", "Cordella", "Chubb" gibi özel isimleri telaffuz ettiğinde yukarıdaki Güncel Google Takvim Listesindeki gerçek etkinlik isimleriyle eşleştir ("Crater" kelimesini "Jüri" veya "Kriter" olarak yanlış yazma!).
-3. TAKVİM / AJANDA ("calendar") vs NOT ("note") AYRIMI:
-   - Mesajda "ajanda", "ajandama", "ajandaya", "takvim", "takvime", "etkinlik", "toplantı", "randevu", "görev", "görüşme", "girer misin", "gir" geçiyorsa VEYA belirli bir saat/zaman içeren bir eylem/hatırlatma/arama varsa, intent KESİNLİKLE "calendar" olmalıdır.
-4. Mesaj "!rehber", "!kisi", "rehber", "kişi", "numara" içeriyorsa intent KESİNLİKLE "contact" olmalıdır.`;
+1. YENİ ETKİNLİK EKLEYİP BİR KİŞİYE GÖNDERME ("create" + katılımcı daveti) KESİN KURALI:
+   - Eğer kullanıcı YENİ bir etkinlik/görev girilmesini ve aynı zamanda bir kişiye/e-postaya gönderilmesini istiyorsa (Örn: "Sabah 08:30'a kahvaltı ve okula gidiş etkinliği girip eşim Esmeray'ın gmail hesabına gönder", "Yarın 14:00'e toplantı ekleyip Ali'ye gönder"), "action" KESİNLİKLE "create" olmalıdır!
+   - Bu durumda ASLA "share" veya "update" seçme ve takvim listesindeki başka bir etkinliği (Örn: 09:00'daki Passolig vb.) ASLA seçme!
+   - "calendar.title" alanına sadece yeni etkinliğin adını yaz (Örn: "Kahvaltı ve Okula Gidiş").
+   - "recipientQuery" alanına davet edilecek kişinin sadece ismini yaz (Örn: "Esmeray"). "recipientEmail" alanını boş bırak ki sistem kişinin gerçek Gmail adresini Google Rehber'den (Contacts) bulsun.
+   - Kullanıcı akşam/öğleden sonra konuşurken "Sabah 08:30'a..." diyorsa bu YARIN sabah (${tomorrowIso} 08:30) demektir; "calendar.date" alanına "${tomorrowIso}" yaz!
+2. SİLME ("delete") VE GÜNCELLEME ("update") KESİN KURALI:
+   - Mesajda "sil", "siler misin", "iptal", "iptal et", "kaldır", "çıkar", "ajandamdan sil", "takvimden sil" geçiyorsa "action" KESİNLİKLE "delete" olmalıdır! ASLA "create" yapma!
+   - Silme veya güncellemede yukarıdaki Güncel Google Takvim Listesinden SADECE kullanıcının söylediği gün, saat ve başlıkla gerçekten örtüşen etkinliği seç. İsimleri hiç benzemeyen başka bir etkinliği (Örn: Kahvaltı yerine Passolig) ASLA eşleştirme!
+3. SESLİ KOMUT (VOICE) ÇÖZÜMLEME VE HASSASİYET KURALLARI:
+   - Sesli söylenen saatleri 24 saatlik HH:mm formatına çevir (Örn: "sabah sekiz buçuk / 08.30" -> "08:30", "iki buçuk / on dört otuz" -> "14:30", "üç buçuk" -> "15:30", "dörtte / on altıda" -> "16:00").
+4. TAKVİM / AJANDA ("calendar") vs NOT ("note") AYRIMI:
+   - Mesajda "ajanda", "takvim", "etkinlik", "toplantı", "randevu", "görev", "görüşme", "girer misin", "girip", "gir" geçiyorsa VEYA belirli bir saat/zaman içeren bir eylem varsa, intent KESİNLİKLE "calendar" olmalıdır.
+5. Mesaj "!rehber", "!kisi", "rehber", "kişi", "numara" içeriyorsa intent KESİNLİKLE "contact" olmalıdır.`;
 
   const cleanMimeType =
     (params.mimeType || "audio/ogg").split(";")[0].trim() || "audio/ogg";
@@ -1036,24 +1066,22 @@ async function findGoogleCalendarEvent(
         score -= 80;
       }
 
-      // 2. Time match bonus (exact or within ±30 mins)
+      // 2. Time match bonus (exact time match only; never match a 09:00 event when user asked for 08:30 with a different title!)
       if (options?.hasExplicitTime && options?.startTime && itemTime) {
         const [qH, qM] = options.startTime.split(":").map(Number);
         const [iH, iM] = itemTime.split(":").map(Number);
         const diffMins = Math.abs(qH * 60 + qM - (iH * 60 + iM));
         if (diffMins === 0) {
           score += 180;
-        } else if (diffMins <= 30) {
-          score += 110;
         } else if (options.hasExplicitDate && itemDate === options.date) {
-          score -= 40;
+          score -= 50;
         }
       }
 
-      // 3. Distinctive title words match
+      // 3. Distinctive title words match — STRICT RULE: if user specified title words, at least 1 distinctive word MUST match!
       if (distinctWords.length > 0) {
         if (distinctPhrase && sumNorm.includes(distinctPhrase)) {
-          score += 140;
+          score += 160;
         } else {
           let matchedCount = 0;
           for (const w of distinctWords) {
@@ -1064,10 +1092,21 @@ async function findGoogleCalendarEvent(
               matchedCount++;
             }
           }
-          score += matchedCount * 65;
-          if (matchedCount === 0 && !(options?.hasExplicitTime && itemTime === options?.startTime && itemDate === options?.date)) {
-            score -= 60;
+          if (matchedCount === 0) {
+            return -1;
           }
+          score += matchedCount * 75;
+        }
+      } else {
+        // User did not specify any title word (e.g. "Yarın saat 16:00'daki toplantıyı sil") -> require exact date + exact time
+        if (
+          !(
+            options?.hasExplicitTime &&
+            itemTime === options?.startTime &&
+            itemDate === options?.date
+          )
+        ) {
+          return -1;
         }
       }
 
@@ -1160,6 +1199,41 @@ async function resolveRecipientEmails(
   recipientQuery?: string
 ): Promise<{ emails: string[]; resolvedContactName?: string }> {
   const emailList: string[] = [];
+  let resolvedContactName: string | undefined;
+
+  // 1. Clean recipientQuery and look up in Google Contacts FIRST (so we get verified contact email instead of Gemini guesses)
+  const cleanRecipientQuery = (recipientQuery || "")
+    .replace(
+      /\b(eşim|esim|karım|kocam|oğlum|kızım|annem|babam|kardeşim|arkadaşım|rehberdeki|gmail|mail\w*|e-?posta\w*|eposta\w*|hesab\w*|adres\w*)\b/gi,
+      ""
+    )
+    .replace(/['’][a-zçğıöşü]+/gi, "")
+    .trim();
+
+  if (cleanRecipientQuery && accessToken) {
+    const contactPerson = await findGooglePersonContact(
+      accessToken,
+      cleanRecipientQuery
+    );
+    const contactEmails: string[] = Array.isArray(contactPerson?.emailAddresses)
+      ? contactPerson.emailAddresses
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          .map((e: any) => String(e.value || "").trim().toLowerCase())
+          .filter(Boolean)
+      : [];
+
+    if (contactEmails.length > 0) {
+      const prefersGmail = /gmail/i.test(`${rawEmailStr || ""} ${recipientQuery || ""}`);
+      const gmailMatch = contactEmails.find((e) => e.includes("@gmail.com"));
+      const chosenEmail = prefersGmail && gmailMatch ? gmailMatch : contactEmails[0];
+      emailList.push(chosenEmail);
+      resolvedContactName =
+        contactPerson?.names?.[0]?.displayName || cleanRecipientQuery;
+      return { emails: emailList, resolvedContactName };
+    }
+  }
+
+  // 2. Fallback to explicit email addresses in rawEmailStr
   if (rawEmailStr) {
     const matches =
       rawEmailStr.match(/[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/g) ||
@@ -1167,20 +1241,6 @@ async function resolveRecipientEmails(
     for (const m of matches) {
       const lower = m.toLowerCase();
       if (!emailList.includes(lower)) emailList.push(lower);
-    }
-  }
-
-  let resolvedContactName: string | undefined;
-  if (emailList.length === 0 && recipientQuery && accessToken) {
-    const contactPerson = await findGooglePersonContact(
-      accessToken,
-      recipientQuery
-    );
-    const contactEmail = contactPerson?.emailAddresses?.[0]?.value;
-    if (contactEmail) {
-      emailList.push(String(contactEmail).toLowerCase());
-      resolvedContactName =
-        contactPerson?.names?.[0]?.displayName || recipientQuery;
     }
   }
 
@@ -1204,6 +1264,7 @@ async function createGoogleCalendarEvent(
   ok: boolean;
   duplicate?: boolean;
   invitedEmails?: string[];
+  resolvedContactName?: string;
   error?: string;
 }> {
   try {
@@ -1263,7 +1324,7 @@ async function createGoogleCalendarEvent(
       // Ignore check error and proceed
     }
 
-    const { emails } = await resolveRecipientEmails(
+    const { emails, resolvedContactName } = await resolveRecipientEmails(
       accessToken,
       evt.attendeeEmail || evt.attendee,
       recipientQuery ||
@@ -1286,7 +1347,7 @@ async function createGoogleCalendarEvent(
         body: JSON.stringify({
           summary: evt.title,
           location: evt.location,
-          description: `Katılımcı: ${evt.attendee}\nWhatsApp ⇄ Google Workspace Asistanı üzerinden oluşturuldu.`,
+          description: `Katılımcı: ${resolvedContactName || evt.attendee}\nWhatsApp ⇄ Google Workspace Asistanı üzerinden oluşturuldu.`,
           start: {
             dateTime: startDateTime,
             timeZone: "Europe/Istanbul",
@@ -1321,6 +1382,7 @@ async function createGoogleCalendarEvent(
       ok: true,
       htmlLink: data.htmlLink,
       invitedEmails: emails.length > 0 ? emails : undefined,
+      resolvedContactName,
     };
   } catch (err) {
     return {
@@ -2033,12 +2095,20 @@ export async function processAssistantInput(params: {
   const normTranscriptForAction = normalizeTr(transcript);
   const hasExplicitDeleteWord =
     /\b(sil|siler|silin|iptal|kaldir|cikar)\b/.test(normTranscriptForAction);
+  const hasExplicitCreateWord =
+    !hasExplicitDeleteWord &&
+    !localParsed.shiftMinutes &&
+    /\b(ekle\w*|olustur\w*|ayarla\w*|planla\w*|gir\b|girip\b|girer\s*misin\w*|girermisin\w*|girelim\b|girmesini\b|kaydet\w*|kaydedip\b)\b/.test(
+      normTranscriptForAction
+    );
 
-  const action: ActionType = hasExplicitDeleteWord
+  let action: ActionType = hasExplicitDeleteWord
     ? "delete"
-    : localParsed.action !== "create"
-      ? localParsed.action
-      : parsed.action || "create";
+    : hasExplicitCreateWord
+      ? "create"
+      : localParsed.action !== "create"
+        ? localParsed.action
+        : parsed.action || "create";
   const rawTargetQuery =
     parsed.targetQuery ||
     localParsed.targetQuery ||
@@ -2077,6 +2147,11 @@ export async function processAssistantInput(params: {
       calData.endTime = localParsed.calendar.endTime;
     }
 
+    // Ensure clean title (strip any leftover "girip ... gönder" clause if Gemini left it in)
+    if (calData.title && localParsed.calendar?.title && /\b(girip|gonder|gönder|hesabina|hesabına)\b/i.test(calData.title)) {
+      calData.title = localParsed.calendar.title;
+    }
+
     const searchOptions: CalendarSearchOptions = {
       date: calData.date,
       startTime: calData.startTime,
@@ -2102,56 +2177,67 @@ export async function processAssistantInput(params: {
           recipientQuery,
           searchOptions
         );
-        syncedToGoogle = shareRes.ok;
-        htmlLink = shareRes.htmlLink;
-        if (shareRes.matchedTitle) matchedTitle = shareRes.matchedTitle;
-        invitedEmails = shareRes.invitedEmails;
-        resolvedContactName = shareRes.resolvedContactName;
-        googleSyncError = shareRes.error;
+        // Smart fallback: if user gave an explicit time + title + recipient, and no existing event matched that title,
+        // the user wants to CREATE this new event at that time and send the invite to the recipient!
+        if (!shareRes.ok && localParsed.hasExplicitTime && (recipientQuery || recipientEmail)) {
+          action = "create";
+        } else {
+          syncedToGoogle = shareRes.ok;
+          htmlLink = shareRes.htmlLink;
+          if (shareRes.matchedTitle) matchedTitle = shareRes.matchedTitle;
+          invitedEmails = shareRes.invitedEmails;
+          resolvedContactName = shareRes.resolvedContactName;
+          googleSyncError = shareRes.error;
+        }
       }
 
-      const recipientDisplay = invitedEmails?.length
-        ? resolvedContactName
-          ? `${resolvedContactName} (${invitedEmails.join(", ")})`
-          : invitedEmails.join(", ")
-        : recipientEmail || recipientQuery || "Alıcı";
+      if (action === "share") {
+        const recipientDisplay = invitedEmails?.length
+          ? resolvedContactName
+            ? `${resolvedContactName} (${invitedEmails.join(", ")})`
+            : invitedEmails.join(", ")
+          : recipientEmail || recipientQuery || "Alıcı";
 
-      const replyText =
-        `📨 *Google Takvim Etkinliği / Görevi Gönderildi!*\n\n` +
-        `📌 *Etkinlik / Görev:* ${matchedTitle}\n` +
-        `✉️ *Gönderilen Alıcı:* ${recipientDisplay}` +
-        (syncedToGoogle
-          ? `\n✅ *Google Takvim üzerinden karşı tarafa resmi e-posta ve takvim daveti gönderildi!*`
-          : googleSyncError
-            ? `\n⚠️ _${googleSyncError}_`
-            : "");
+        const replyText =
+          (isVoice
+            ? `🎙️ *Sesli Komut Algılandı:* _"${transcript}"_\n\n`
+            : "") +
+          `📨 *Google Takvim Etkinliği / Görevi Gönderildi!*\n\n` +
+          `📌 *Etkinlik / Görev:* ${matchedTitle}\n` +
+          `✉️ *Gönderilen Alıcı:* ${recipientDisplay}` +
+          (syncedToGoogle
+            ? `\n✅ *Google Takvim üzerinden karşı tarafa resmi e-posta ve takvim daveti gönderildi!*`
+            : googleSyncError
+              ? `\n⚠️ _${googleSyncError}_`
+              : "");
 
-      return {
-        transcript,
-        intent: "calendar",
-        action: "share",
-        targetQuery: matchedTitle,
-        replyText,
-        usedGemini,
-        syncedToGoogle,
-        googleSyncError,
-        calendarEvent: {
-          id: "evt-" + Date.now(),
-          title: matchedTitle,
-          date: calData.date,
-          startTime: calData.startTime,
-          endTime: calData.endTime,
-          attendee: recipientDisplay,
-          attendeeEmail: invitedEmails?.join(", ") || recipientEmail,
-          location: calData.location || "Google Meet",
-          source: isVoice
-            ? "🎙️ WhatsApp Sesli Davet"
-            : "💬 WhatsApp E-posta Daveti",
-          createdTime: "Gönderildi",
-          htmlLink,
-          syncedWithGoogle: syncedToGoogle,
-        },
-      };
+        return {
+          transcript,
+          intent: "calendar",
+          action: "share",
+          targetQuery: matchedTitle,
+          replyText,
+          usedGemini,
+          syncedToGoogle,
+          googleSyncError,
+          calendarEvent: {
+            id: "evt-" + Date.now(),
+            title: matchedTitle,
+            date: calData.date,
+            startTime: calData.startTime,
+            endTime: calData.endTime,
+            attendee: recipientDisplay,
+            attendeeEmail: invitedEmails?.join(", ") || recipientEmail,
+            location: calData.location || "Google Meet",
+            source: isVoice
+              ? "🎙️ WhatsApp Sesli Davet"
+              : "💬 WhatsApp E-posta Daveti",
+            createdTime: "Gönderildi",
+            htmlLink,
+            syncedWithGoogle: syncedToGoogle,
+          },
+        };
+      }
     }
 
     if (action === "delete") {
@@ -2246,6 +2332,9 @@ export async function processAssistantInput(params: {
       };
 
       const replyText =
+        (isVoice
+          ? `🎙️ *Sesli Komut Algılandı:* _"${transcript}"_\n\n`
+          : "") +
         `🔄 *Google Takvim Etkinliği Güncellendi!*\n\n` +
         `📌 *Başlık:* ${calendarEvent.title}\n` +
         `🗓️ *Yeni Tarih/Saat:* ${calendarEvent.date}, ${calendarEvent.startTime} - ${calendarEvent.endTime}\n` +
@@ -2285,6 +2374,7 @@ export async function processAssistantInput(params: {
 
     let htmlLink: string | undefined;
     let invitedEmails: string[] | undefined;
+    let resolvedContactName: string | undefined;
     if (accessToken) {
       const calRes = await createGoogleCalendarEvent(
         accessToken,
@@ -2305,8 +2395,15 @@ export async function processAssistantInput(params: {
       syncedToGoogle = calRes.ok;
       htmlLink = calRes.htmlLink;
       invitedEmails = calRes.invitedEmails;
+      resolvedContactName = calRes.resolvedContactName;
       googleSyncError = calRes.error;
     }
+
+    const attendeeDisplay = invitedEmails?.length
+      ? resolvedContactName
+        ? `${resolvedContactName} (${invitedEmails.join(", ")})`
+        : invitedEmails.join(", ")
+      : calData.attendee || "WhatsApp Kullanıcısı";
 
     const calendarEvent: CalendarItem = {
       id: "evt-" + Date.now(),
@@ -2314,8 +2411,7 @@ export async function processAssistantInput(params: {
       date: calData.date,
       startTime: calData.startTime,
       endTime: calData.endTime,
-      attendee:
-        invitedEmails?.join(", ") || calData.attendee || "WhatsApp Kullanıcısı",
+      attendee: attendeeDisplay,
       attendeeEmail: invitedEmails?.join(", ") || calData.attendeeEmail,
       location: calData.location || "Google Meet",
       source: isVoice ? "🎙️ WhatsApp Sesli Komut" : "💬 WhatsApp Metin Komutu",
@@ -2326,11 +2422,14 @@ export async function processAssistantInput(params: {
 
     const syncTag = syncedToGoogle
       ? invitedEmails?.length
-        ? `\n📨 *Davet Gönderilen E-posta:* ${invitedEmails.join(", ")}\n✅ *Gerçek Google Takvim'inize eklendi ve karşı tarafa e-posta daveti gönderildi!*`
+        ? `\n📨 *Davet Gönderilen Alıcı:* ${attendeeDisplay}\n✅ *Gerçek Google Takvim'inize eklendi ve karşı tarafa resmi e-posta daveti gönderildi!*`
         : "\n✅ *Gerçek Google Takvim'inize senkronize edildi!*"
       : "";
 
     const replyText =
+      (isVoice
+        ? `🎙️ *Sesli Komut Algılandı:* _"${transcript}"_\n\n`
+        : "") +
       `📅 *Google Takvim'e Etkinlik / Görev Eklendi!*\n\n` +
       `📌 *Başlık:* ${calendarEvent.title}\n` +
       `🗓️ *Tarih:* ${calendarEvent.date}, ${calendarEvent.startTime} - ${calendarEvent.endTime}\n` +
