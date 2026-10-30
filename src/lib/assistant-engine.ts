@@ -120,6 +120,18 @@ export function isBotReplyEcho(rawText?: string): boolean {
   if (!rawText) return false;
   const t = rawText.replace(/^\u200B+|\u200B+$/g, "").trim();
   if (!t) return false;
+  const norm = t
+    .toLocaleLowerCase("tr-TR")
+    .replace(/ç/g, "c")
+    .replace(/ğ/g, "g")
+    .replace(/ı/g, "i")
+    .replace(/ö/g, "o")
+    .replace(/ş/g, "s")
+    .replace(/ü/g, "u")
+    .replace(/[^a-z0-9\s]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+
   return (
     rawText.includes("\u200B") ||
     t.startsWith("🎙️") ||
@@ -139,17 +151,29 @@ export function isBotReplyEcho(rawText?: string): boolean {
     t.includes("✅ *Seçilen Google Drive") ||
     t.includes("📝 Mesajınız işlendi") ||
     t.includes("⚠️ *Silinecek") ||
+    t.includes("📞 *Çağrınız Yanıtlandı") ||
+    t.includes("📞 *Canlı Kadın Sesli") ||
     t.startsWith("Anlayamadım. Lütfen") ||
     t.includes("Sesli Komut Algılandı") ||
     t.includes("Sesli Mesaj Çözümlendi") ||
     t.includes("📌 *Başlık:*") ||
     t.includes("🗓️ *Tarih:*") ||
     t.includes("Mehmet Bey ile bütçe toplantısı") ||
-    t.toLocaleLowerCase("tr-TR").includes("ben özel sesli asistanınız") ||
-    t.toLocaleLowerCase("tr-TR").includes("sıradaki komutunuzu dinliyorum") ||
-    t.toLocaleLowerCase("tr-TR").includes("whatsapp aramanızı aldım") ||
-    t.toLocaleLowerCase("tr-TR").includes("çağrınızı aldım, sizi dinliyorum") ||
-    t.toLocaleLowerCase("tr-TR").includes("başka bir isteğiniz var mı")
+    norm.includes("ben ozel sesli asistaniniz") ||
+    norm.includes("siradaki komutunuzu dinliyorum") ||
+    norm.includes("whatsapp aramanizi aldim") ||
+    norm.includes("cagrinizi aldim") ||
+    norm.includes("sizi dinliyorum") ||
+    norm.includes("ne yapmami istersiniz") ||
+    norm.includes("baska bir isteginiz var mi") ||
+    norm.includes("tamamdir onur bey") ||
+    norm.includes("tamamdir ozgur bey") ||
+    norm.includes("buyurun onur bey") ||
+    norm.includes("buyrun onur bey") ||
+    norm.includes("buyrun ozgur bey") ||
+    norm.includes("efendim ozgur bey") ||
+    norm.includes("secenekler halinde listeledim") ||
+    norm.includes("simdi sizinle paylasiyorum")
   );
 }
 

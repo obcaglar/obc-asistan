@@ -615,7 +615,15 @@ async function startWhatsAppBot() {
         if (nowPre - ts > 25000) processedMediaSignatures.delete(k);
       }
       if (audioMsg) {
-        if (nowPre < (botSendingVoiceUntil.get(jid) || 0)) {
+        const isSelfChat = jid.startsWith(TARGET_ASSISTANT_PHONE);
+        const mimeStr = String(audioMsg.mimetype || "").toLowerCase();
+        if (
+          (m.key?.fromMe && !isSelfChat) ||
+          (m.key?.fromMe &&
+            (mimeStr.includes("mp4") || mimeStr.includes("mpeg"))) ||
+          nowPre < (botSendingVoiceUntil.get(jid) || 0)
+        ) {
+          processedMessageIds.add(msgId);
           continue;
         }
         const rawSha = audioMsg.fileSha256
@@ -879,28 +887,6 @@ async function startWhatsAppBot() {
           }
         }
 
-        // If the user sent a voice command OR is in an active WhatsApp voice call session, also reply with a spoken Turkish Female Voice Note!
-        const inActiveCallSession =
-          Date.now() - (activeVoiceCallJids.get(jid) || 0) < 10 * 60 * 1000;
-        if (isVoice || inActiveCallSession) {
-          const summaryLines = String(result.replyText || "")
-            .split("\n")
-            .filter(
-              (l) =>
-                l.trim() &&
-                !l.includes("Sesli Komut Algılandı") &&
-                !l.includes("http")
-            )
-            .slice(0, 2)
-            .join(". ");
-          const spokenReply =
-            result.spokenReply ||
-            (result.chainedCount
-              ? `Tamamdır Onur Bey, peş peşe söylediğiniz ${result.chainedCount} komutu da yerine getirdim. Başka bir isteğiniz var mı?`
-              : `${summaryLines}. Başka bir isteğiniz var mı?`);
-          await sendFemaleVoiceNoteSafely(sock, jid, spokenReply);
-        }
-
         console.log("✅ Tekil yanıt WhatsApp üzerinden gönderildi!");
       } catch (err) {
         console.error("Asistan hatası:", err.message);
@@ -911,9 +897,8 @@ async function startWhatsAppBot() {
   });
 
   // Listen to incoming WhatsApp Voice/Video Calls:
-  // 1. Answer every call immediately (no 20s caller block so 2nd/3rd calls never ring unanswered!)
-  // 2. Auto-launch the standalone Chrome App Window with --autoplay-policy=no-user-gesture-required and --use-fake-ui-for-media-stream so the female voice speaks out loud AND the microphone starts listening with ZERO clicks!
-  // 3. Reply in WhatsApp with a short, natural human Turkish Female Voice greeting
+  // 1. Do NOT hang up/reject the call immediately and do NOT send static voice files into chat (which caused echo loops)
+  // 2. Immediately open the Live Female Voice Assistant Window with Autoplay + Mic unlocked so the female assistant answers out loud and listens in real time!
   const processedCallIds = new Set();
   let lastDesktopBrowserOpenMs = 0;
   sock.ev.on("call", async (calls) => {
@@ -929,10 +914,10 @@ async function startWhatsAppBot() {
       activeVoiceCallJids.set(callerJid, now);
 
       console.log(
-        `📞 WhatsApp Sesli Arama Algılandı (${callerJid}, callId=${call.id}) -> Canlı Kadın Sesli Asistan Yanıtlıyor!`
+        `📞 WhatsApp Sesli Arama Algılandı (${callerJid}, callId=${call.id}) -> Canlı Kadın Sesli Asistan Penceresi Açılıyor!`
       );
 
-      // 1. Signal both Local and Vercel Cloud web apps immediately so any open tab activates the Live Voice Call UI!
+      // 1. Signal Local web app immediately so any open tab activates the Live Voice Call UI!
       axios
         .post(
           ASSISTANT_API_URL,
@@ -940,26 +925,19 @@ async function startWhatsAppBot() {
           { timeout: 4000 }
         )
         .catch(() => {});
-      axios
-        .post(
-          VERCEL_API_URL,
-          { action: "incoming_call", callId: call.id, callerJid },
-          { timeout: 5000 }
-        )
-        .catch(() => {});
 
-      // 2. On Windows desktop, launch a dedicated Chrome Call Window with Autoplay + Auto-Mic unlocked so it speaks out loud and listens immediately!
+      // 2. On Windows desktop, launch the dedicated Chrome Call Window with Autoplay + Auto-Mic unlocked so it speaks out loud and listens immediately!
       if (
         process.platform === "win32" &&
         !process.env.RENDER &&
-        now - lastDesktopBrowserOpenMs > 15000
+        now - lastDesktopBrowserOpenMs > 12000
       ) {
         lastDesktopBrowserOpenMs = now;
         try {
           const chromeExe =
             "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe";
           const callProfileDir = path.join(__dirname, ".chrome_call_profile");
-          const callUrl = "https://obc-asistan.vercel.app/?call=1&autostart=1";
+          const callUrl = "http://localhost:3000/?call=1&autostart=1";
           if (fs.existsSync(chromeExe)) {
             exec(
               `"${chromeExe}" --user-data-dir="${callProfileDir}" --autoplay-policy=no-user-gesture-required --use-fake-ui-for-media-stream --window-size=540,820 --app="${callUrl}"`
@@ -968,41 +946,6 @@ async function startWhatsAppBot() {
             exec(`start "" "${callUrl}"`);
           }
         } catch {}
-      }
-
-      // 3. After 1.2s ring, transition the WhatsApp call to the active assistant session
-      setTimeout(async () => {
-        try {
-          if (typeof sock.rejectCall === "function") {
-            await sock.rejectCall(call.id, call.from);
-          }
-        } catch {}
-      }, 1200);
-
-      // 4. Send a concise Live Call Card + short, natural Turkish Female Voice Greeting directly in WhatsApp
-      try {
-        const callMsg =
-          `📞 *Çağrınız Yanıtlandı — Sizi Dinliyorum Onur Bey!*\n\n` +
-          `👩‍💼 _"Buyurun Onur Bey, çağrınızı aldım, sizi dinliyorum. Ne yapmamı istersiniz?"_\n\n` +
-          `🎙️ *Canlı görüşme pencereniz mikrofonu açık olarak başlatıldı.* Doğrudan konuşabilir veya bu sohbetten sesli komut gönderebilirsiniz:\n` +
-          `👉 https://obc-asistan.vercel.app/?call=1&autostart=1${BOT_INVISIBLE_MARKER}`;
-        const sentCallMsg = await sock.sendMessage(callerJid, {
-          text: callMsg,
-        });
-        lastBotReplyTimePerJid.set(callerJid, Date.now());
-        if (sentCallMsg?.key?.id) {
-          sentBotMessageIds.add(sentCallMsg.key.id);
-          processedMessageIds.add(sentCallMsg.key.id);
-        }
-
-        // Send concise, natural Turkish Female Voice Note greeting inside WhatsApp!
-        await sendFemaleVoiceNoteSafely(
-          sock,
-          callerJid,
-          "Buyurun Onur Bey, çağrınızı aldım, sizi dinliyorum. Ne yapmamı istersiniz?"
-        );
-      } catch (err) {
-        console.error("Çağrı yanıt hatası:", err.message);
       }
     }
   });

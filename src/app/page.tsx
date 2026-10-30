@@ -165,7 +165,7 @@ export default function HomePage() {
   const callAudioCtxRef = useRef<AudioContext | null>(null);
   const callPreloadedGreetingUrlRef = useRef<string>("");
   const callExecutingRef = useRef<boolean>(false);
-  const lastHandledCallIdRef = useRef<string>("");
+  const handledCallIdsRef = useRef<Set<string>>(new Set());
   const [callNeedsAudioTap, setCallNeedsAudioTap] = useState(false);
   const [callMicLevel, setCallMicLevel] = useState(0);
   const [callIsRecordingSpeech, setCallIsRecordingSpeech] = useState(false);
@@ -267,22 +267,27 @@ export default function HomePage() {
           if (
             data?.activeWhatsAppCall &&
             data.activeWhatsAppCall.callId &&
-            lastHandledCallIdRef.current !== data.activeWhatsAppCall.callId
+            !handledCallIdsRef.current.has(data.activeWhatsAppCall.callId)
           ) {
-            lastHandledCallIdRef.current = data.activeWhatsAppCall.callId;
+            const incomingId = data.activeWhatsAppCall.callId;
+            handledCallIdsRef.current.add(incomingId);
             fetch("/api/assistant", {
               method: "POST",
               headers: { "Content-Type": "application/json" },
               body: JSON.stringify({
                 action: "ack_call",
-                callId: data.activeWhatsAppCall.callId,
+                callId: incomingId,
               }),
             }).catch(() => {});
 
-            if (!callActiveRef.current) {
-              startWhatsAppVoiceCall();
-            } else {
-              // If already open when a new WhatsApp call arrives, immediately re-greet & listen!
+            const isRecentCall =
+              !data.activeWhatsAppCall.timestamp ||
+              Date.now() - data.activeWhatsAppCall.timestamp < 15000;
+            const isVisibleTab =
+              typeof document === "undefined" || !document.hidden;
+
+            // Only open if not already in an active call and this is the visible tab (prevents multi-tab & infinite restart loops!)
+            if (!callActiveRef.current && isRecentCall && isVisibleTab) {
               startWhatsAppVoiceCall();
             }
           }
@@ -420,6 +425,7 @@ export default function HomePage() {
     audioBase64?: string;
     mimeType?: string;
     isVoice: boolean;
+    fromLiveCall?: boolean;
   }) {
     setIsBotTyping(true);
     setBotTypingText(
@@ -449,6 +455,14 @@ export default function HomePage() {
 
       const result: AssistantProcessResult = await res.json();
       setIsBotTyping(false);
+
+      if (
+        result.duplicate ||
+        !result.replyText ||
+        (params.fromLiveCall && result.intent === "help" && !params.text)
+      ) {
+        return result;
+      }
 
       let meta: ChatMessage["meta"] = null;
 
@@ -640,47 +654,8 @@ export default function HomePage() {
   }
 
   // ==================== WHATSAPP LIVE VOICE CALL & NATURAL TURKISH FEMALE TTS ====================
-  function speakWithBrowserFemaleFallback(
-    cleanForSpeech: string,
-    onDone?: () => void
-  ) {
-    if (typeof window === "undefined" || !window.speechSynthesis) {
-      if (onDone) onDone();
-      return;
-    }
-    try {
-      window.speechSynthesis.cancel();
-      const utter = new SpeechSynthesisUtterance(
-        cleanForSpeech ||
-          "Komutunuz çalıştırıldı. Sıradaki komutunuzu dinliyorum."
-      );
-      utter.lang = "tr-TR";
-      utter.pitch = 1.18; // Warm female pitch
-      utter.rate = 1.05;
-      const voices = window.speechSynthesis.getVoices?.() || [];
-      const trFemale =
-        voices.find(
-          (v: SpeechSynthesisVoice) =>
-            v.lang?.toLowerCase().startsWith("tr") &&
-            /emel|yelda|filiz|female|kadın|kadin|siri|google/i.test(v.name)
-        ) ||
-        voices.find((v: SpeechSynthesisVoice) =>
-          v.lang?.toLowerCase().startsWith("tr")
-        );
-      if (trFemale) utter.voice = trFemale;
-
-      utter.onend = () => {
-        if (onDone) onDone();
-      };
-      utter.onerror = () => {
-        if (onDone) onDone();
-      };
-      window.speechSynthesis.speak(utter);
-    } catch {
-      if (onDone) onDone();
-    }
-  }
-
+  // Note: Browser speechSynthesis is intentionally NOT used because Windows default tr-TR voice (Microsoft Tolga) is male.
+  // Only /api/tts (Natural Turkish Female Voice) is used.
   function speakTurkishText(text: string, onDone?: () => void) {
     if (typeof window === "undefined" || !callTtsRef.current) {
       if (onDone) onDone();
@@ -699,7 +674,10 @@ export default function HomePage() {
       if (!doneCalled) {
         doneCalled = true;
         clearTimeout(safetyTimer);
-        if (onDone) onDone();
+        // Wait 550ms after speaker audio ends so speaker echo never enters the microphone
+        setTimeout(() => {
+          if (onDone) onDone();
+        }, 550);
       }
     };
 
@@ -740,7 +718,7 @@ export default function HomePage() {
         safeDone();
       };
       audio.onerror = () => {
-        speakWithBrowserFemaleFallback(cleanForSpeech, safeDone);
+        safeDone();
       };
 
       const playPromise = audio.play();
@@ -750,13 +728,10 @@ export default function HomePage() {
             setCallNeedsAudioTap(false);
           })
           .catch(() => {
-            // Autoplay blocked when window popped open automatically without a prior click:
-            // Try browser speech synthesis briefly, and ensure microphone starts listening immediately!
+            // Autoplay blocked when window popped open without a prior click:
+            // Show 1-tap audio button and start microphone listening immediately (never invoke male speechSynthesis!)
             setCallNeedsAudioTap(true);
-            speakWithBrowserFemaleFallback(cleanForSpeech);
-            setTimeout(() => {
-              safeDone();
-            }, 350);
+            safeDone();
           });
       }
     } catch {
@@ -961,6 +936,7 @@ export default function HomePage() {
           const dataArr = new Uint8Array(analyser.frequencyBinCount);
 
           let hasSpokenInCycle = false;
+          let consecutiveVoiceFrames = 0;
           let silenceSinceMs = 0;
 
           callVadIntervalRef.current = setInterval(() => {
@@ -979,22 +955,29 @@ export default function HomePage() {
             const rms = Math.sqrt(sumSq / dataArr.length);
             const visualLevel = Math.min(
               100,
-              Math.round(Math.max(rms * 1100, peak * 320))
+              Math.round(Math.max(rms * 950, peak * 260))
             );
             setCallMicLevel(visualLevel);
 
-            // Detect normal conversational voice (rms > 0.008 or peak > 0.035)
-            if (rms > 0.008 || peak > 0.035) {
-              hasSpokenInCycle = true;
+            // Require sustained human voice (rms > 0.032 or peak > 0.11 for >= 4 consecutive ticks = ~480ms)
+            // so background room hum or brief clicks never trigger false recordings!
+            if (rms > 0.032 || peak > 0.11) {
+              consecutiveVoiceFrames += 1;
               silenceSinceMs = Date.now();
-              setCallIsRecordingSpeech(true);
-            } else if (
-              hasSpokenInCycle &&
-              callHandsFreeRef.current &&
-              Date.now() - silenceSinceMs > 1550
-            ) {
-              hasSpokenInCycle = false;
-              flushCallSpeechNow();
+              if (consecutiveVoiceFrames >= 4) {
+                hasSpokenInCycle = true;
+                setCallIsRecordingSpeech(true);
+              }
+            } else {
+              consecutiveVoiceFrames = 0;
+              if (
+                hasSpokenInCycle &&
+                callHandsFreeRef.current &&
+                Date.now() - silenceSinceMs > 1600
+              ) {
+                hasSpokenInCycle = false;
+                flushCallSpeechNow();
+              }
             }
           }, 120);
         }
@@ -1065,10 +1048,16 @@ export default function HomePage() {
       audioBase64,
       mimeType,
       isVoice: true,
+      fromLiveCall: true,
     });
 
     const effectiveCommand = result?.transcript || command || "";
-    if (!effectiveCommand || result?.duplicate) {
+    if (
+      !effectiveCommand ||
+      result?.duplicate ||
+      !result?.replyText ||
+      (!command && result?.intent === "help")
+    ) {
       callExecutingRef.current = false;
       setCallLiveTranscript("");
       if (callActiveRef.current) {
@@ -1226,13 +1215,6 @@ export default function HomePage() {
   useEffect(() => {
     callTtsRef.current = callTtsEnabled;
   }, [callTtsEnabled]);
-
-  useEffect(() => {
-    if (isVoiceCallOpen && callDurationSec === 0 && !callTimerRef.current) {
-      startWhatsAppVoiceCall();
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isVoiceCallOpen]);
 
   function handleSendTextMessage(e: React.FormEvent) {
     e.preventDefault();
