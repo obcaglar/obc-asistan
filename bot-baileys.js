@@ -334,13 +334,12 @@ async function generateTurkishFemaleVoiceBuffer(rawText) {
   try {
     const cleaned = String(rawText || "")
       .replace(/https?:\/\/\S+/g, "")
-      .replace(
-        /[*_`~#•1️⃣2️⃣3️⃣4️⃣5️⃣6️⃣7️⃣8️⃣📅🔄🗑️📨👤📝📋📸📁✅⚠️🎙️💡📂🔗🗓️🏢📞✉️🔔👥📍⚡━]/g,
-        " "
-      )
+      .replace(/[0-9]\uFE0F?\u20E3/g, " ")
+      .replace(/[*_`~#•━]/g, " ")
+      .replace(/[\u{1F300}-\u{1FAFF}\u{2600}-\u{27BF}\uFE0F]/gu, " ")
       .replace(/\s+/g, " ")
       .trim()
-      .slice(0, 185);
+      .slice(0, 200);
     if (!cleaned) return null;
 
     const url = `https://translate.googleapis.com/translate_tts?client=gtx&ie=UTF-8&tl=tr&dt=t&q=${encodeURIComponent(
@@ -897,10 +896,44 @@ async function startWhatsAppBot() {
   });
 
   // Listen to incoming WhatsApp Voice/Video Calls:
-  // 1. Do NOT hang up/reject the call immediately and do NOT send static voice files into chat (which caused echo loops)
-  // 2. Immediately open the Live Female Voice Assistant Window with Autoplay + Mic unlocked so the female assistant answers out loud and listens in real time!
+  // 1. Signal Local & Cloud web apps immediately and open the Foreground Live Female Voice Assistant window
+  // 2. End the WhatsApp ringing tone after 1.8s (one ring) so the ringing sound stops right as the female assistant begins speaking
+  // 3. Send a 1-tap Live Call Card (text only with BOT_INVISIBLE_MARKER, never audio files) so Mobile WhatsApp users can also tap or see live results in chat
   const processedCallIds = new Set();
   let lastDesktopBrowserOpenMs = 0;
+  let lastCallerJid = `${TARGET_ASSISTANT_PHONE}@s.whatsapp.net`;
+
+  // Forward any command executed during the Live Voice Call UI straight into the caller's WhatsApp chat!
+  const notifTimer = setInterval(async () => {
+    if (sock !== activeSock) {
+      clearInterval(notifTimer);
+      return;
+    }
+    try {
+      const nRes = await axios.get(
+        `${ASSISTANT_API_URL}?consume_notifications=1`,
+        { timeout: 2000 }
+      );
+      const items = Array.isArray(nRes.data?.notifications)
+        ? nRes.data.notifications
+        : [];
+      for (const item of items) {
+        if (!item?.text) continue;
+        let targetJid = item.jid || lastCallerJid;
+        if (!targetJid.includes("@")) {
+          targetJid = `${targetJid.replace(/\D/g, "")}@s.whatsapp.net`;
+        }
+        const outMsg = item.text + BOT_INVISIBLE_MARKER;
+        const sent = await sock.sendMessage(targetJid, { text: outMsg });
+        lastBotReplyTimePerJid.set(targetJid, Date.now());
+        if (sent?.key?.id) {
+          sentBotMessageIds.add(sent.key.id);
+          processedMessageIds.add(sent.key.id);
+        }
+      }
+    } catch {}
+  }, 2000);
+
   sock.ev.on("call", async (calls) => {
     for (const call of calls) {
       if (call.status !== "offer") continue;
@@ -911,13 +944,14 @@ async function startWhatsAppBot() {
       if (call.id) processedCallIds.add(call.id);
 
       const now = Date.now();
+      lastCallerJid = callerJid;
       activeVoiceCallJids.set(callerJid, now);
 
       console.log(
         `📞 WhatsApp Sesli Arama Algılandı (${callerJid}, callId=${call.id}) -> Canlı Kadın Sesli Asistan Penceresi Açılıyor!`
       );
 
-      // 1. Signal Local AND Cloud web apps immediately so any open tab activates the Live Voice Call UI!
+      // 1. Signal Local AND Cloud web apps immediately so any active mobile/desktop screen activates the Live Voice Call UI!
       axios
         .post(
           ASSISTANT_API_URL,
@@ -935,7 +969,43 @@ async function startWhatsAppBot() {
           .catch(() => {});
       }
 
-      // 2. Send a 1-tap Live Call Card (text only with BOT_INVISIBLE_MARKER, never audio files) so Mobile WhatsApp users can also tap to talk on their phone
+      // 2. On Windows desktop, IMMEDIATELY launch & bring to foreground the dedicated Chrome Call Window on top of Web WhatsApp!
+      if (
+        process.platform === "win32" &&
+        !process.env.RENDER &&
+        now - lastDesktopBrowserOpenMs > 5000
+      ) {
+        lastDesktopBrowserOpenMs = now;
+        try {
+          const chromeExe =
+            "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe";
+          const callProfileDir = path.join(__dirname, ".chrome_call_profile");
+          const callUrl = "http://localhost:3000/?call=1&autostart=1";
+          if (fs.existsSync(chromeExe)) {
+            exec(
+              `"${chromeExe}" --user-data-dir="${callProfileDir}" --autoplay-policy=no-user-gesture-required --use-fake-ui-for-media-stream --window-size=540,840 --app="${callUrl}"`
+            );
+            setTimeout(() => {
+              exec(
+                `powershell -NoProfile -Command "(New-Object -ComObject WScript.Shell).AppActivate('OBC')"`
+              );
+            }, 900);
+          } else {
+            exec(`start "" "${callUrl}"`);
+          }
+        } catch {}
+      }
+
+      // 3. Stop the WhatsApp ringing sound after 1.8s (1 ring) so Web WhatsApp and Cep WhatsApp stop ringing right as the female assistant speaks!
+      setTimeout(async () => {
+        try {
+          if (typeof sock.rejectCall === "function") {
+            await sock.rejectCall(call.id, call.from);
+          }
+        } catch {}
+      }, 1800);
+
+      // 4. Send a 1-tap Live Call Card (text only with BOT_INVISIBLE_MARKER, never audio files) so Mobile & Web WhatsApp users see the call is active
       try {
         const callMsg =
           `📞 *Çağrınız Yanıtlandı — Sizi Dinliyorum Onur Bey!*\n\n` +
@@ -952,40 +1022,6 @@ async function startWhatsAppBot() {
         }
       } catch (err) {
         console.error("Çağrı kartı gönderim hatası:", err.message);
-      }
-
-      // 3. On Windows desktop, check after 1.5s if an open browser tab already answered the call; if not, launch the dedicated Chrome Call Window!
-      if (
-        process.platform === "win32" &&
-        !process.env.RENDER &&
-        now - lastDesktopBrowserOpenMs > 8000
-      ) {
-        setTimeout(async () => {
-          try {
-            const checkRes = await axios.get(ASSISTANT_API_URL, {
-              timeout: 2000,
-            });
-            // If an open tab already acknowledged and answered the call, activeWhatsAppCall is null
-            if (!checkRes?.data?.activeWhatsAppCall) {
-              return;
-            }
-          } catch {}
-
-          lastDesktopBrowserOpenMs = Date.now();
-          try {
-            const chromeExe =
-              "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe";
-            const callProfileDir = path.join(__dirname, ".chrome_call_profile");
-            const callUrl = "http://localhost:3000/?call=1&autostart=1";
-            if (fs.existsSync(chromeExe)) {
-              exec(
-                `"${chromeExe}" --user-data-dir="${callProfileDir}" --autoplay-policy=no-user-gesture-required --use-fake-ui-for-media-stream --window-size=540,820 --app="${callUrl}"`
-              );
-            } else {
-              exec(`start "" "${callUrl}"`);
-            }
-          } catch {}
-        }, 1500);
       }
     }
   });

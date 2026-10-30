@@ -5,6 +5,8 @@ import {
   recentWebhookEvents,
   fetchLiveWorkspaceSnapshot,
   activeWhatsAppCall,
+  pendingWhatsAppNotifications,
+  queueWhatsAppNotification,
   triggerIncomingWhatsAppCall,
   acknowledgeWhatsAppCall,
   resolveGoogleAccessToken,
@@ -15,6 +17,21 @@ const recentBotRequests = new Map<string, number>();
 
 export async function GET(request: NextRequest) {
   const wantLive = request.nextUrl.searchParams.get("live") === "1";
+  const consumeNotifs =
+    request.nextUrl.searchParams.get("consume_notifications") === "1";
+
+  if (consumeNotifs) {
+    const items = pendingWhatsAppNotifications.splice(
+      0,
+      pendingWhatsAppNotifications.length
+    );
+    return NextResponse.json({
+      ok: true,
+      notifications: items,
+      activeWhatsAppCall,
+    });
+  }
+
   let liveWorkspace = null;
 
   if (
@@ -22,7 +39,7 @@ export async function GET(request: NextRequest) {
     (recentWebhookEvents.calendars.length === 0 &&
       recentWebhookEvents.contacts.length === 0)
   ) {
-    liveWorkspace = await fetchLiveWorkspaceSnapshot(false);
+    liveWorkspace = await fetchLiveWorkspaceSnapshot(wantLive);
   }
 
   const hasToken = Boolean(
@@ -75,6 +92,7 @@ export async function POST(request: NextRequest) {
       isVoice,
       credentials,
       fromWhatsAppBot,
+      fromLiveCall,
     }: {
       text?: string;
       audioBase64?: string;
@@ -82,6 +100,7 @@ export async function POST(request: NextRequest) {
       isVoice?: boolean;
       credentials?: AssistantCredentials;
       fromWhatsAppBot?: boolean;
+      fromLiveCall?: boolean;
     } = body;
 
     if (fromWhatsAppBot) {
@@ -110,16 +129,15 @@ export async function POST(request: NextRequest) {
       credentials,
     });
 
-    if (fromWhatsAppBot && !result.duplicate) {
-      if (result.calendarEvent) {
-        recentWebhookEvents.calendars.unshift(result.calendarEvent);
-      }
-      if (result.contact) {
-        recentWebhookEvents.contacts.unshift(result.contact);
-      }
-      if (result.note) {
-        recentWebhookEvents.notes.unshift(result.note);
-      }
+    // If a real command was executed during a Live Voice Call, also queue its confirmation card for the user's WhatsApp chat!
+    if (
+      fromLiveCall &&
+      !fromWhatsAppBot &&
+      !result.duplicate &&
+      result.replyText &&
+      result.intent !== "help"
+    ) {
+      queueWhatsAppNotification(result.replyText);
     }
 
     return NextResponse.json(result);

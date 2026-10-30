@@ -211,7 +211,33 @@ export interface ActiveWhatsAppCallState {
   answeredByWeb: boolean;
 }
 
+export interface PendingWhatsAppNotification {
+  id: string;
+  jid: string;
+  text: string;
+  timestamp: number;
+}
+
 export let activeWhatsAppCall: ActiveWhatsAppCallState | null = null;
+export const pendingWhatsAppNotifications: PendingWhatsAppNotification[] = [];
+
+export function queueWhatsAppNotification(text: string, jid?: string) {
+  if (!text || !text.trim()) return;
+  const targetJid =
+    jid ||
+    activeWhatsAppCall?.callerJid ||
+    process.env.WHATSAPP_ASSISTANT_NUMBER ||
+    "+905491007729";
+  pendingWhatsAppNotifications.push({
+    id: "notif-" + Date.now() + "-" + Math.random().toString(36).slice(2, 7),
+    jid: targetJid,
+    text: text.trim(),
+    timestamp: Date.now(),
+  });
+  while (pendingWhatsAppNotifications.length > 25) {
+    pendingWhatsAppNotifications.shift();
+  }
+}
 
 export function triggerIncomingWhatsAppCall(callId: string, callerJid: string) {
   activeWhatsAppCall = {
@@ -238,12 +264,16 @@ let cachedLiveWorkspaceSnapshot: {
   driveFiles: DriveFileItem[];
 } | null = null;
 
+export function invalidateLiveWorkspaceCache() {
+  cachedLiveWorkspaceSnapshot = null;
+}
+
 export async function fetchLiveWorkspaceSnapshot(force = false) {
   const now = Date.now();
   if (
     !force &&
     cachedLiveWorkspaceSnapshot &&
-    now - cachedLiveWorkspaceSnapshot.fetchedAt < 25000
+    now - cachedLiveWorkspaceSnapshot.fetchedAt < 15000
   ) {
     return cachedLiveWorkspaceSnapshot;
   }
@@ -263,13 +293,14 @@ export async function fetchLiveWorkspaceSnapshot(force = false) {
   }
 
   const headers = { Authorization: `Bearer ${accessToken}` };
-  const twoDaysAgoIso = new Date(now - 2 * 24 * 3600 * 1000).toISOString();
+  const istNow = getIstanbulNow();
+  const todayStartIso = `${formatIsoDate(istNow)}T00:00:00+03:00`;
 
   const [calRes, cntRes, taskRes, photoRes, driveRes] = await Promise.all([
     fetch(
       `https://www.googleapis.com/calendar/v3/calendars/primary/events?timeMin=${encodeURIComponent(
-        twoDaysAgoIso
-      )}&maxResults=15&singleEvents=true&orderBy=startTime`,
+        todayStartIso
+      )}&maxResults=50&singleEvents=true&orderBy=startTime`,
       { headers, cache: "no-store" }
     )
       .then((r) => (r.ok ? r.json() : null))
@@ -576,7 +607,8 @@ function parseDateAndTimeFromTurkishText(text: string): {
       }
     }
     if (!hasExplicitDate) {
-      targetDate.setDate(now.getDate() + 1);
+      // Default to today unless an explicit past morning hour is detected below
+      targetDate.setDate(now.getDate());
     }
   }
 
@@ -591,13 +623,38 @@ function parseDateAndTimeFromTurkishText(text: string): {
     hasExplicitDate = true;
   }
 
-  let startHour = 15;
+  let startHour = 14;
   let startMin = 0;
   let hasExplicitTime = false;
   const timeMatch = text.match(/\b([01]?\d|2[0-3])[:.]([0-5]\d)\b/);
+  const hourHalfMatch = lower.match(
+    /(?:^|\s)(?:saat\s*)?([01]?\d|2[0-3])\s*(?:buçuk|bucuk)(?:ta|da)?(?=\s|$|[.,;:!?'’])/i
+  );
+  const explicitSaatHourMatch = lower.match(
+    /(?:^|\s)saat\s*([01]?\d|2[0-3])(?:\s*['’]?\s*(?:de|da|te|ta|e|a|ye|ya|daki|deki|taki|teki))?(?=\s|$|[.,;:!?])/i
+  );
+  const suffixedHourMatch = lower.match(
+    /(?:^|\s)([01]?\d|2[0-3])\s*['’]\s*(?:de|da|te|ta|e|a|ye|ya|daki|deki|taki|teki)(?=\s|$|[.,;:!?])/i
+  );
+
   if (timeMatch) {
     startHour = parseInt(timeMatch[1], 10);
     startMin = parseInt(timeMatch[2], 10);
+    hasExplicitTime = true;
+  } else if (hourHalfMatch) {
+    startHour = parseInt(hourHalfMatch[1], 10);
+    if (startHour >= 1 && startHour <= 7 && !lower.includes("sabah") && !lower.includes("gece")) {
+      startHour += 12;
+    }
+    startMin = 30;
+    hasExplicitTime = true;
+  } else if (explicitSaatHourMatch || suffixedHourMatch) {
+    const rawH = parseInt((explicitSaatHourMatch || suffixedHourMatch)![1], 10);
+    startHour =
+      rawH >= 1 && rawH <= 7 && !lower.includes("sabah") && !lower.includes("gece")
+        ? rawH + 12
+        : rawH;
+    startMin = 0;
     hasExplicitTime = true;
   } else {
     // Support spoken Turkish clock expressions from voice messages
@@ -629,13 +686,20 @@ function parseDateAndTimeFromTurkishText(text: string): {
     }
   }
 
-  // If user did not say "yarın", and specified a time later today (or said "bu akşam" / "akşam"), keep today's date!
+  // If user did not specify a date, keep today's date unless they gave an earlier morning hour (e.g. "sabah 08:30") that already passed by >2 hours
   if (!hasExplicitDate && !isoMatch && !trDateMatch) {
-    const isLaterToday =
+    if (
       hasExplicitTime &&
-      (startHour > now.getHours() ||
-        (startHour === now.getHours() && startMin >= now.getMinutes()));
-    if (isLaterToday || lower.includes("bu akşam") || lower.includes("bu aksam")) {
+      startHour < now.getHours() - 2 &&
+      !lower.includes("bugün") &&
+      !lower.includes("bugun") &&
+      !lower.includes("bu akşam") &&
+      !lower.includes("bu aksam")
+    ) {
+      const tomorrow = new Date(now);
+      tomorrow.setDate(now.getDate() + 1);
+      dateStr = formatIsoDate(tomorrow);
+    } else {
       dateStr = formatIsoDate(now);
     }
   }
@@ -1039,13 +1103,16 @@ export function parseCommandLocally(
       )
       .replace(/\bsaat\s*\d{1,2}[:.]\d{2}(\s*['’]?[a-zçğıöşü]+)?/gi, "")
       .replace(/\b\d{1,2}[:.]\d{2}(\s*['’]?[a-zçğıöşü]+)?/gi, "")
+      .replace(/(?:^|\s)saat\s*(?:[01]?\d|2[0-3])(?:\s*['’]?[a-zçğıöşü]+)?(?=\s|$|[.,;:!?])/gi, " ")
+      .replace(/(?:^|\s)(?:[01]?\d|2[0-3])\s*['’]\s*(?:de|da|te|ta|e|a|ye|ya|daki|deki|taki|teki)(?=\s|$|[.,;:!?])/gi, " ")
       .replace(
         /(\d+|bir|iki|üç|uc|dört|dort|yarım|yarim)\s*(saat|dakika|dk)\s*(öne\s*çek\w*|one\s*cek\w*|öne\s*al\w*|one\s*al\w*|erkene\s*çek\w*|erkene\s*al\w*|geri(?:ye)?\s*çek\w*|geri(?:ye)?\s*al\w*|ileri(?:ye)?\s*al\w*|ileri(?:ye)?\s*çek\w*|sonraya\s*al\w*|ertele\w*)/gi,
         ""
       )
+      .replace(/\bsonra\s+bir\s+(?:kullanıcı|kullanici|kişi|kisi)\b.*$/i, "")
       .replace(
-        /\b(ajandama|ajandaya|ajandada|ajandadan|ajanda|takvimime|takvimdeki|takvimden|takvime|takvim|için|icin|gibi|etkinlik|etkinliği|etkinligi|girer\s*misin\w*|girermisin\w*|ekler\s*misin\w*|eklermisin\w*|girip|gir|planla|ayarla|ekleyip|ekle|oluşturup|oluştur|olustur|kaydedip|kaydet|sil|kaldır|kaldir|iptal\s*et|iptal|güncelle|guncelle|değiştir|degistir|ertele|taşı|tasi|öne|one|ileriye|ileri|geriye|geri|sonraya|çekmeni|cekmeni|çek|cek|almanı|al|istiyorum|lütfen|lutfen|gönder\w*|gonder\w*|davet\s*et|davet|paylaş\w*|paylas\w*|adresine|hesabına|hesabina|gmail|mailine|epostasına|e-postasına|epostaya|e-postaya|kullanıcısına|kişisine|eşim|esim|rehberdeki|toplantısını|toplantisini|randevusunu|etkinliğini|görevini|gorevini|olan|toplantıyı|toplantiyi|daki|deki|taki|teki)\b/gi,
-        ""
+        /(?:^|\s)(ajandama|ajandaya|ajandada|ajandadan|ajanda|takvimime|takvimdeki|takvimden|takvime|takvimde|takvim|için|icin|gibi|bir\s+tane|bir\s+adet|etkinlik|etkinliği|etkinligi|etkinliğini|etkinligini|toplantı|toplanti|toplantısı|toplantisi|toplantısını|toplantisini|toplantıyı|toplantiyi|randevu|randevusu|randevusunu|görev|gorev|görevi|gorevi|görevini|gorevini|konularını|konularini|konuşacağız|konusacagiz|girer\s*misin\w*|girermisin\w*|ekler\s*misin\w*|eklermisin\w*|açar\s*mısın\w*|acarmisin\w*|yapabilir\s*misin\w*|yapar\s*mısın\w*|girip|gir|planla\w*|ayarla\w*|ekleyip|eklemeni|ekle|oluşturup|oluşturmanı|olusturmani|oluştur|olustur|kaydedip|kaydet\w*|açmanı|acmani|açıp|aç|ac|sil|kaldır|kaldir|iptal\s*et|iptal|güncelle|guncelle|değiştir|degistir|ertele|taşı|tasi|öne|one|ileriye|ileri|geriye|geri|sonraya|çekmeni|cekmeni|çek|cek|almanı|al|istiyorum|isterim|lütfen|lutfen|gönder\w*|gonder\w*|davet\s*et|davet|paylaş\w*|paylas\w*|adresine|hesabına|hesabina|gmail|mailine|epostasına|e-postasına|epostaya|e-postaya|kullanıcısına|kişisine|eşim|esim|rehberdeki|olan|bu|bana|hemen|şimdi|simdi|daki|deki|taki|teki)(?=\s|$|[.,;:!?'’])/gi,
+        " "
       )
       .replace(/["'“”«»]/g, "")
       .replace(/toplantısını/gi, "Toplantısı")
@@ -1695,8 +1762,13 @@ async function findGoogleCalendarEvent(
           let matchedCount = 0;
           for (const w of distinctWords) {
             if (
-              sumNorm.includes(w) ||
-              sumDistinct.some((sw) => sw.includes(w) || w.includes(sw))
+              sumDistinct.some(
+                (sw) =>
+                  sw === w ||
+                  (sw.length >= 4 &&
+                    w.length >= 4 &&
+                    (sw.startsWith(w) || w.startsWith(sw)))
+              )
             ) {
               matchedCount++;
             }
@@ -1918,17 +1990,24 @@ async function createGoogleCalendarEvent(
               normTitle.length >= 3 &&
               (itemNorm.includes(normTitle) || normTitle.includes(itemNorm)));
 
-          // If an event in the same time slot with similar title already exists, or was created by the bot in the last 60s
+          // If an identical event was just created by the bot in the last 18s (Local + Cloud race deduplication)
           if (
-            (sameTimeSlot && similarTitle) ||
-            (isFromBot &&
-              createdMs > 0 &&
-              nowMs - createdMs < 60000 &&
-              (sameTimeSlot || similarTitle))
+            isFromBot &&
+            createdMs > 0 &&
+            nowMs - createdMs < 18000 &&
+            sameTimeSlot &&
+            similarTitle
           ) {
             return {
               ok: true,
               duplicate: true,
+              htmlLink: item.htmlLink,
+            };
+          }
+          // If the exact same event already exists in this time slot from earlier, return its existing link as ok (not silent duplicate)
+          if (sameTimeSlot && similarTitle) {
+            return {
+              ok: true,
               htmlLink: item.htmlLink,
             };
           }
@@ -4643,6 +4722,42 @@ function splitIntoSequentialCommands(rawText: string): string[] {
   return [trimmed];
 }
 
+function formatSpokenTurkishDate(isoDate?: string): string {
+  if (!isoDate || !/^\d{4}-\d{2}-\d{2}$/.test(isoDate)) {
+    return "bugün";
+  }
+  const monthsTr = [
+    "Ocak",
+    "Şubat",
+    "Mart",
+    "Nisan",
+    "Mayıs",
+    "Haziran",
+    "Temmuz",
+    "Ağustos",
+    "Eylül",
+    "Ekim",
+    "Kasım",
+    "Aralık",
+  ];
+  const [, mStr, dStr] = isoDate.split("-");
+  const dayNum = parseInt(dStr, 10);
+  const monthName = monthsTr[parseInt(mStr, 10) - 1] || "";
+  const now = getIstanbulNow();
+  const todayIso = formatIsoDate(now);
+  const tomorrow = new Date(now);
+  tomorrow.setDate(now.getDate() + 1);
+  const tomorrowIso = formatIsoDate(tomorrow);
+
+  if (isoDate === todayIso) {
+    return `bugün ${dayNum} ${monthName}`;
+  }
+  if (isoDate === tomorrowIso) {
+    return `yarın ${dayNum} ${monthName}`;
+  }
+  return `${dayNum} ${monthName}`;
+}
+
 export function buildNaturalSpokenReply(res: AssistantProcessResult): string {
   if (res.duplicate || !res.replyText) return "";
 
@@ -4652,18 +4767,27 @@ export function buildNaturalSpokenReply(res: AssistantProcessResult): string {
 
   if (res.intent === "calendar") {
     const title = res.calendarEvent?.title || res.targetQuery || "etkinlik";
+    const spokenDate = formatSpokenTurkishDate(res.calendarEvent?.date);
+    const spokenTime = res.calendarEvent?.startTime || "14:00";
     if (res.action === "delete") {
       return res.syncedToGoogle
         ? `Tamamdır Onur Bey, ${title} etkinliğini Google Takvim'inizden sildim. Başka bir isteğiniz var mı?`
         : `Onur Bey, takviminizde ${title} adında bir etkinlik bulamadım.`;
     }
     if (res.action === "update") {
-      return `Tamamdır Onur Bey, ${title} etkinliğinizi ${res.calendarEvent?.date || ""} saat ${res.calendarEvent?.startTime || ""} olarak güncelledim. Başka bir isteğiniz var mı?`;
+      return res.syncedToGoogle
+        ? `Tamamdır Onur Bey, ${title} etkinliğinizi ${spokenDate} saat ${spokenTime} olarak Google Takvim'inizde güncelledim. Başka bir isteğiniz var mı?`
+        : `Onur Bey, ${title} etkinliği takviminizde bulunamadığı için güncellenemedi.`;
     }
     if (res.action === "share") {
-      return `Tamamdır Onur Bey, ${title} etkinliği için ilgili kişiye takvim davetiyesini gönderdim. Başka bir isteğiniz var mı?`;
+      return res.syncedToGoogle
+        ? `Tamamdır Onur Bey, ${title} etkinliği için ilgili kişiye takvim davetiyesini gönderdim. Başka bir isteğiniz var mı?`
+        : `Onur Bey, ${title} etkinliği için takvim davetiyesi gönderilemedi.`;
     }
-    return `Tamamdır Onur Bey, ${title} etkinliğini ${res.calendarEvent?.date || "takviminize"} saat ${res.calendarEvent?.startTime || ""} için Google Takvim'inize ekledim. Başka bir isteğiniz var mı?`;
+    if (!res.syncedToGoogle && res.googleSyncError) {
+      return `Onur Bey, ${title} etkinliği oluşturulurken bir hata oluştu: ${res.googleSyncError}`;
+    }
+    return `Tamamdır Onur Bey, ${title} etkinliğini ${spokenDate} saat ${spokenTime} için Google Takvim'inize ekledim. Başka bir isteğiniz var mı?`;
   }
 
   if (res.intent === "contact") {
@@ -4718,6 +4842,33 @@ export async function processAssistantInput(params: {
   const result = await processAssistantInputCore(params);
   if (!result.spokenReply && !result.duplicate) {
     result.spokenReply = buildNaturalSpokenReply(result);
+  }
+  if (!result.duplicate && !params._skipChaining) {
+    if (result.calendarEvent) {
+      recentWebhookEvents.calendars = [
+        result.calendarEvent,
+        ...recentWebhookEvents.calendars.filter(
+          (x) => x.id !== result.calendarEvent!.id
+        ),
+      ].slice(0, 25);
+      invalidateLiveWorkspaceCache();
+    }
+    if (result.contact) {
+      recentWebhookEvents.contacts = [
+        result.contact,
+        ...recentWebhookEvents.contacts.filter(
+          (x) => x.id !== result.contact!.id
+        ),
+      ].slice(0, 35);
+      invalidateLiveWorkspaceCache();
+    }
+    if (result.note) {
+      recentWebhookEvents.notes = [
+        result.note,
+        ...recentWebhookEvents.notes.filter((x) => x.id !== result.note!.id),
+      ].slice(0, 25);
+      invalidateLiveWorkspaceCache();
+    }
   }
   return result;
 }
@@ -4926,6 +5077,24 @@ async function processAssistantInputCore(params: {
     if (localParsed.recipientQuery && !parsed.recipientQuery) {
       parsed.recipientQuery = localParsed.recipientQuery;
     }
+  } else if (
+    localParsed.intent === "contact" &&
+    /^!(?:rehber|kisi|kişi)\b/i.test(transcript.trim())
+  ) {
+    parsed = localParsed;
+  } else if (
+    localParsed.intent === "calendar" &&
+    parsed.intent !== "calendar" &&
+    /\b(toplanti\w*|etkinlik\w*|etkinlig\w*|takvim\w*|randevu\w*|ajanda\w*)\b/.test(
+      normalizeTr(transcript)
+    )
+  ) {
+    // Never let a calendar/meeting request be misclassified as "contact" or "help"
+    parsed.intent = "calendar";
+    parsed.action = localParsed.action;
+    if (!parsed.calendar?.title && localParsed.calendar) {
+      parsed.calendar = localParsed.calendar;
+    }
   }
 
   // Hard guard: priority order is delete > update > create
@@ -4941,7 +5110,7 @@ async function processAssistantInputCore(params: {
   const hasExplicitCreateWord =
     !hasExplicitDeleteWord &&
     !hasExplicitUpdateWord &&
-    /\b(ekle\w*|olustur\w*|ayarla\w*|planla\w*|gir\b|girip\b|girer\s*misin\w*|girermisin\w*|girelim\b|girmesini\b|kaydet\w*|kaydedip\b)\b/.test(
+    /\b(ekle\w*|olustur\w*|ayarla\w*|planla\w*|gir\b|girip\b|girer\s*misin\w*|girermisin\w*|girelim\b|girmesini\b|kaydet\w*|kaydedip\b|ac\b|acar\s*misin\w*)\b/.test(
       normTranscriptForAction
     );
 
@@ -4970,7 +5139,7 @@ async function processAssistantInputCore(params: {
   let syncedToGoogle = false;
   let googleSyncError: string | undefined;
 
-  // Guard against background room conversations on open microphone being misclassified as "note" or "calendar"
+  // Guard against background room conversations on open microphone being misclassified as "note", "calendar", or "contact"
   if (isVoice && parsed.intent === "note") {
     const hasExplicitNoteKeyword =
       /\b(not\b|notu\b|notunu|gorev\w*|hatirlat\w*|is\s+olarak|listeye|kaydet\w*|yaz\b|ata\w*)\b/.test(
@@ -4980,16 +5149,45 @@ async function processAssistantInputCore(params: {
       parsed.intent = "help";
     }
   }
-  if (isVoice && parsed.intent === "calendar" && action === "create") {
-    const hasExplicitCalKeyword =
-      /\b(toplanti\w*|etkinlik\w*|takvim\w*|randevu\w*|ajanda\w*|planla\w*|ayarla\w*|ekle\w*|gir\b|girip\b|kaydet\w*|davet\w*|saat\b|yarin\b|bugun\b|haftaya\b)\b/.test(
+  if (isVoice && parsed.intent === "calendar") {
+    const hasExplicitCalVerbOrTime =
+      Boolean(localParsed.hasExplicitTime) ||
+      /\b(planla\w*|ayarla\w*|ekle\w*|olustur\w*|ac\b|acmani|acar\s*misin\w*|gir\b|girip\b|girer\s*misin\w*|kaydet\w*|davet\w*|gonder\w*|paylas\w*|sil\w*|iptal\w*|kaldir\w*|guncelle\w*|degistir\w*|ertele\w*|tasi\w*|one\s*cek\w*|ileri\w*\s*al\w*)\b/.test(
         normTranscriptForAction
       );
+    const hasExplicitCalNoun =
+      /\b(toplanti\w*|etkinlik\w*|etkinlig\w*|takvim\w*|randevu\w*|ajanda\w*|saat\b|yarin\b|bugun\b|haftaya\b)\b/.test(
+        normTranscriptForAction
+      );
+    const candidateCalTitle = String(
+      parsed.calendar?.title || localParsed.calendar?.title || ""
+    ).trim();
+    const isParagraphChatter =
+      candidateCalTitle.split(/\s+/).length > 10 ||
+      transcript.split(/\s+/).length > 32;
     if (
-      !hasExplicitCalKeyword &&
-      !localParsed.hasExplicitTime &&
-      !localParsed.hasExplicitDate
+      !hasExplicitCalVerbOrTime ||
+      (!hasExplicitCalNoun && !localParsed.hasExplicitTime) ||
+      isParagraphChatter
     ) {
+      parsed.intent = "help";
+    }
+  }
+  if (isVoice && parsed.intent === "contact") {
+    const hasPhoneDigits = /\b0?5\d{2}[\s-]?\d{3}[\s-]?\d{2}[\s-]?\d{2}\b|\b\d{10,11}\b/.test(
+      transcript
+    );
+    const hasExplicitContactKeyword =
+      /\b(rehber\w*|kisi\b|kisiyi|kisisini|kisiler\w*|numara\w*|telefon\w*)\b/.test(
+        normTranscriptForAction
+      );
+    const candidateName = (parsed.contact?.name || localParsed.contact?.name || "").trim();
+    const isLongSentenceNotName =
+      candidateName.split(/\s+/).length > 5 ||
+      /\b(toplanti\w*|takvim\w*|etkinlik\w*|istiyorum|konusacagiz|yapabilir|misin)\b/.test(
+        normalizeTr(candidateName)
+      );
+    if ((!hasExplicitContactKeyword && !hasPhoneDigits) || isLongSentenceNotName) {
       parsed.intent = "help";
     }
   }
@@ -5000,25 +5198,62 @@ async function processAssistantInputCore(params: {
       localParsed.calendar || {
         title: targetQuery || "Toplantı",
         date: formatIsoDate(getIstanbulNow()),
-        startTime: "15:00",
-        endTime: "16:00",
+        startTime: "14:00",
+        endTime: "15:00",
         attendee: recipientEmail || "WhatsApp Kullanıcısı",
         attendeeEmail: recipientEmail,
         location: "Google Meet",
       };
 
-    // Prefer explicit date/time extracted from transcript if Gemini didn't set it accurately
-    if (localParsed.hasExplicitDate && localParsed.calendar?.date) {
+    // Always validate date (YYYY-MM-DD) and prefer localParsed date if Gemini returned an invalid/empty date or if localParsed has explicit date
+    if (!calData.date || !/^\d{4}-\d{2}-\d{2}$/.test(calData.date)) {
+      calData.date =
+        localParsed.calendar?.date || formatIsoDate(getIstanbulNow());
+    } else if (localParsed.hasExplicitDate && localParsed.calendar?.date) {
       calData.date = localParsed.calendar.date;
     }
+
+    // Prefer explicit time extracted from transcript ("14:00'e", "saat 14'te") and validate HH:mm format
     if (localParsed.hasExplicitTime && localParsed.calendar?.startTime) {
       calData.startTime = localParsed.calendar.startTime;
       calData.endTime = localParsed.calendar.endTime;
     }
+    if (
+      !calData.startTime ||
+      !/^(?:[01]\d|2[0-3]):[0-5]\d$/.test(calData.startTime) ||
+      (calData.startTime === "00:00" && !/\b00[:.]00\b|\bgece\s*yar[ıi]s[ıi]\b/i.test(transcript))
+    ) {
+      calData.startTime = localParsed.calendar?.startTime || "14:00";
+    }
+    if (
+      !calData.endTime ||
+      !/^(?:[01]\d|2[0-3]):[0-5]\d$/.test(calData.endTime) ||
+      calData.endTime === calData.startTime
+    ) {
+      const [sh, sm] = calData.startTime.split(":").map(Number);
+      calData.endTime = `${String((sh + 1) % 24).padStart(2, "0")}:${String(
+        sm || 0
+      ).padStart(2, "0")}`;
+    }
 
-    // Ensure clean title (strip any leftover "girip ... gönder" clause if Gemini left it in)
-    if (calData.title && localParsed.calendar?.title && /\b(girip|gonder|gönder|hesabina|hesabına)\b/i.test(calData.title)) {
+    // Ensure clean title (strip any leftover "etkinliği aç", "oluştur", "girip ... gönder" clause if Gemini left it in)
+    if (
+      calData.title &&
+      localParsed.calendar?.title &&
+      /\b(girip|gonder|gönder|hesabina|hesabına|istiyorum|konuşacağız|konusacagiz|yapabilir)\b/i.test(
+        calData.title
+      )
+    ) {
       calData.title = localParsed.calendar.title;
+    }
+    calData.title = String(calData.title || localParsed.calendar?.title || "Planlanan Etkinlik")
+      .replace(
+        /(?:\s+(?:etkinliği|etkinligi|etkinlik|toplantısı|toplantisi|toplantı|toplanti))?\s+(?:aç|ac|oluştur|olustur|ekle|ayarla|planla|gir)$/i,
+        ""
+      )
+      .trim();
+    if (!calData.title || calData.title.length < 2) {
+      calData.title = localParsed.calendar?.title || "Planlanan Etkinlik";
     }
 
     const searchOptions: CalendarSearchOptions = {
@@ -5229,7 +5464,7 @@ async function processAssistantInputCore(params: {
 
     // CREATE CALENDAR EVENT (with optional immediate email invitation)
     const calSig = `cal:${calData.date}:${calData.startTime}:${normalizeTr(calData.title)}`;
-    if (isRecentlyCreatedSignature(calSig, 45000)) {
+    if (isRecentlyCreatedSignature(calSig, 15000)) {
       return {
         transcript,
         intent: "calendar",
@@ -5289,11 +5524,14 @@ async function processAssistantInputCore(params: {
       syncedWithGoogle: syncedToGoogle,
     };
 
+    const linkLine = htmlLink ? `\n🔗 *Takvimde Görüntüle:* ${htmlLink}` : "";
     const syncTag = syncedToGoogle
       ? invitedEmails?.length
-        ? `\n📨 *Davet Gönderilen Alıcı:* ${attendeeDisplay}\n✅ *Gerçek Google Takvim'inize eklendi ve karşı tarafa resmi e-posta daveti gönderildi!*`
-        : "\n✅ *Gerçek Google Takvim'inize senkronize edildi!*"
-      : "";
+        ? `\n📨 *Davet Gönderilen Alıcı:* ${attendeeDisplay}${linkLine}\n✅ *Gerçek Google Takvim'inize eklendi ve karşı tarafa resmi e-posta daveti gönderildi!*`
+        : `${linkLine}\n✅ *Gerçek Google Takvim'inize senkronize edildi!*`
+      : googleSyncError
+        ? `\n⚠️ _${googleSyncError}_`
+        : "";
 
     const replyText =
       (isVoice

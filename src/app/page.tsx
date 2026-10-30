@@ -287,7 +287,13 @@ export default function HomePage() {
               !data.activeWhatsAppCall.timestamp ||
               Date.now() - data.activeWhatsAppCall.timestamp < 20000;
 
-            if (isRecentCall) {
+            const isTabVisibleAndActive =
+              typeof document !== "undefined" &&
+              document.visibilityState === "visible" &&
+              (document.hasFocus() ||
+                (typeof window !== "undefined" && window.innerWidth < 900));
+
+            if (isRecentCall && isTabVisibleAndActive) {
               handledCallIdsRef.current.add(incomingId);
               fetch("/api/assistant", {
                 method: "POST",
@@ -455,6 +461,7 @@ export default function HomePage() {
           audioBase64: params.audioBase64,
           mimeType: params.mimeType,
           isVoice: params.isVoice,
+          fromLiveCall: params.fromLiveCall,
           credentials: {
             geminiApiKey: wizGemini || undefined,
             googleClientId: wizGClient || undefined,
@@ -704,13 +711,12 @@ export default function HomePage() {
 
     const cleanForSpeech = text
       .replace(/https?:\/\/\S+/g, "")
-      .replace(
-        /[*_`~#•1️⃣2️⃣3️⃣4️⃣5️⃣6️⃣7️⃣8️⃣📅🔄🗑️📨👤📝📋📸📁✅⚠️🎙️💡📂🔗🗓️🏢📞✉️🔔👥📍⚡━]/g,
-        " "
-      )
+      .replace(/[0-9]\uFE0F?\u20E3/g, " ")
+      .replace(/[*_`~#•━]/g, " ")
+      .replace(/[\u{1F300}-\u{1FAFF}\u{2600}-\u{27BF}\uFE0F]/gu, " ")
       .replace(/\s+/g, " ")
       .trim()
-      .slice(0, 220);
+      .slice(0, 240);
 
     // Stop any previous audio stream
     if (callAudioRef.current) {
