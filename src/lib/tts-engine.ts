@@ -50,7 +50,7 @@ function pcm16ToWavBuffer(
 function splitTextIntoTtsChunks(text: string, maxLen = 180): string[] {
   const cleaned = cleanTextForSpeech(text);
   if (!cleaned) {
-    return ["Efendim Özgür Bey, sizi dinliyorum. Buyurun, ne yapmamı istersiniz?"];
+    return ["Buyurun Onur Bey, sizi dinliyorum. Ne yapmamı istersiniz?"];
   }
 
   const sentences = cleaned.split(/(?<=[.!?:\n])\s+/);
@@ -83,69 +83,96 @@ function splitTextIntoTtsChunks(text: string, maxLen = 180): string[] {
   return chunks.slice(0, 3);
 }
 
+const ttsMemoryCache = new Map<
+  string,
+  { buffer: Buffer; mimeType: string }
+>();
+
+async function fetchGeminiNeuralFemaleWav(
+  cleaned: string,
+  timeoutMs = 2600
+): Promise<{ buffer: Buffer; mimeType: string } | null> {
+  const apiKey = process.env.GEMINI_API_KEY;
+  if (!apiKey || apiKey.includes("BURAYA_")) return null;
+
+  try {
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+
+    const res = await fetch(
+      `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-tts:generateContent?key=${apiKey}`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        signal: controller.signal,
+        body: JSON.stringify({
+          contents: [
+            {
+              parts: [
+                {
+                  text: `Sıcak, kibar, doğal ve akıcı bir kadın asistan sesiyle Türkçe oku: ${cleaned}`,
+                },
+              ],
+            },
+          ],
+          generationConfig: {
+            responseModalities: ["AUDIO"],
+            speechConfig: {
+              voiceConfig: {
+                prebuiltVoiceConfig: {
+                  voiceName: "Aoede",
+                },
+              },
+            },
+          },
+        }),
+      }
+    );
+    clearTimeout(timeoutId);
+
+    if (res.ok) {
+      const data = await res.json();
+      const inlineData =
+        data?.candidates?.[0]?.content?.parts?.[0]?.inlineData;
+      if (inlineData?.data) {
+        const pcmBuf = Buffer.from(inlineData.data, "base64");
+        if (pcmBuf.length > 400) {
+          const result = {
+            buffer: pcm16ToWavBuffer(pcmBuf, 24000, 1, 16),
+            mimeType: "audio/wav",
+          };
+          ttsMemoryCache.set(cleaned, result);
+          return result;
+        }
+      }
+    }
+  } catch {
+    // Ignore timeout or network error
+  }
+  return null;
+}
+
 export async function generateTurkishFemaleVoiceAudio(rawText: string): Promise<{
   buffer: Buffer;
   mimeType: string;
 } | null> {
   const cleaned =
     cleanTextForSpeech(rawText) ||
-    "Efendim Özgür Bey, sizi dinliyorum. Buyurun, ne yapmamı istersiniz?";
+    "Buyurun Onur Bey, sizi dinliyorum. Ne yapmamı istersiniz?";
 
-  // 1. Try Gemini 2.5 Flash Preview Neural TTS (Aoede / Kore warm female voice)
-  const apiKey = process.env.GEMINI_API_KEY;
-  if (apiKey && !apiKey.includes("BURAYA_")) {
-    try {
-      const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 5500);
+  const cached = ttsMemoryCache.get(cleaned);
+  if (cached) {
+    return cached;
+  }
 
-      const res = await fetch(
-        `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-tts:generateContent?key=${apiKey}`,
-        {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          signal: controller.signal,
-          body: JSON.stringify({
-            contents: [
-              {
-                parts: [
-                  {
-                    text: `Sıcak, kibar, doğal ve akıcı bir kadın asistan sesiyle Türkçe oku: ${cleaned}`,
-                  },
-                ],
-              },
-            ],
-            generationConfig: {
-              responseModalities: ["AUDIO"],
-              speechConfig: {
-                voiceConfig: {
-                  prebuiltVoiceConfig: {
-                    voiceName: "Aoede",
-                  },
-                },
-              },
-            },
-          }),
-        }
-      );
-      clearTimeout(timeoutId);
-
-      if (res.ok) {
-        const data = await res.json();
-        const inlineData =
-          data?.candidates?.[0]?.content?.parts?.[0]?.inlineData;
-        if (inlineData?.data) {
-          const pcmBuf = Buffer.from(inlineData.data, "base64");
-          if (pcmBuf.length > 400) {
-            return {
-              buffer: pcm16ToWavBuffer(pcmBuf, 24000, 1, 16),
-              mimeType: "audio/wav",
-            };
-          }
-        }
-      }
-    } catch {
-      // Fallback to fast MP3 TTS below
-    }
+  // 1. Try Gemini 2.5 Flash Preview Neural TTS (Aoede) with a fast 2.2s budget, while also keeping background warm-up
+  const geminiPromise = fetchGeminiNeuralFemaleWav(cleaned, 4800);
+  const fastBudgetPromise = new Promise<null>((resolve) =>
+    setTimeout(() => resolve(null), 1600)
+  );
+  const quickNeural = await Promise.race([geminiPromise, fastBudgetPromise]);
+  if (quickNeural) {
+    return quickNeural;
   }
 
   // 2. Fast MP3 Turkish Female TTS Fallback

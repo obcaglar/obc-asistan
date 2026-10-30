@@ -34,6 +34,10 @@ yarn-error.log*
 .env*
 !.env.example
 auth_info_baileys*
+.chrome_call_profile*
+.last_search_cache.json
+scratch/
+start-background-bot.vbs
 public/qr.html
 
 # vercel

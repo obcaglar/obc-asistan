@@ -896,7 +896,7 @@ async function startWhatsAppBot() {
           const spokenReply =
             result.spokenReply ||
             (result.chainedCount
-              ? `Tamamdır Özgür Bey, peş peşe söylediğiniz ${result.chainedCount} komutu da yerine getirdim. Başka bir isteğiniz var mı?`
+              ? `Tamamdır Onur Bey, peş peşe söylediğiniz ${result.chainedCount} komutu da yerine getirdim. Başka bir isteğiniz var mı?`
               : `${summaryLines}. Başka bir isteğiniz var mı?`);
           await sendFemaleVoiceNoteSafely(sock, jid, spokenReply);
         }
@@ -912,8 +912,8 @@ async function startWhatsAppBot() {
 
   // Listen to incoming WhatsApp Voice/Video Calls:
   // 1. Answer every call immediately (no 20s caller block so 2nd/3rd calls never ring unanswered!)
-  // 2. Auto-launch/activate the Live Female Voice Assistant UI on Web/Mobile/Desktop
-  // 3. Reply immediately in WhatsApp with a short, natural human Turkish Female Voice greeting
+  // 2. Auto-launch the standalone Chrome App Window with --autoplay-policy=no-user-gesture-required and --use-fake-ui-for-media-stream so the female voice speaks out loud AND the microphone starts listening with ZERO clicks!
+  // 3. Reply in WhatsApp with a short, natural human Turkish Female Voice greeting
   const processedCallIds = new Set();
   let lastDesktopBrowserOpenMs = 0;
   sock.ev.on("call", async (calls) => {
@@ -921,13 +921,6 @@ async function startWhatsAppBot() {
       if (call.status !== "offer") continue;
       const callerJid = call.from || call.chatId;
       if (!callerJid) continue;
-
-      // Always terminate ringing on "offer" so a 2nd or 3rd call NEVER rings unanswered!
-      try {
-        if (typeof sock.rejectCall === "function") {
-          await sock.rejectCall(call.id, call.from);
-        }
-      } catch {}
 
       if (call.id && processedCallIds.has(call.id)) continue;
       if (call.id) processedCallIds.add(call.id);
@@ -939,7 +932,7 @@ async function startWhatsAppBot() {
         `📞 WhatsApp Sesli Arama Algılandı (${callerJid}, callId=${call.id}) -> Canlı Kadın Sesli Asistan Yanıtlıyor!`
       );
 
-      // 2. Signal both Local and Vercel Cloud web apps so any open browser tab on Mobile or PC immediately pops open the Live Voice Call UI and starts listening!
+      // 1. Signal both Local and Vercel Cloud web apps immediately so any open tab activates the Live Voice Call UI!
       axios
         .post(
           ASSISTANT_API_URL,
@@ -955,24 +948,43 @@ async function startWhatsAppBot() {
         )
         .catch(() => {});
 
-      // 3. On Windows desktop, open the Live Voice Call screen if not opened in the last 35s (otherwise the open tab receives incoming_call via polling!)
+      // 2. On Windows desktop, launch a dedicated Chrome Call Window with Autoplay + Auto-Mic unlocked so it speaks out loud and listens immediately!
       if (
         process.platform === "win32" &&
         !process.env.RENDER &&
-        now - lastDesktopBrowserOpenMs > 35000
+        now - lastDesktopBrowserOpenMs > 15000
       ) {
         lastDesktopBrowserOpenMs = now;
         try {
-          exec('start "" "https://obc-asistan.vercel.app/?call=1&autostart=1"');
+          const chromeExe =
+            "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe";
+          const callProfileDir = path.join(__dirname, ".chrome_call_profile");
+          const callUrl = "https://obc-asistan.vercel.app/?call=1&autostart=1";
+          if (fs.existsSync(chromeExe)) {
+            exec(
+              `"${chromeExe}" --user-data-dir="${callProfileDir}" --autoplay-policy=no-user-gesture-required --use-fake-ui-for-media-stream --window-size=540,820 --app="${callUrl}"`
+            );
+          } else {
+            exec(`start "" "${callUrl}"`);
+          }
         } catch {}
       }
+
+      // 3. After 1.2s ring, transition the WhatsApp call to the active assistant session
+      setTimeout(async () => {
+        try {
+          if (typeof sock.rejectCall === "function") {
+            await sock.rejectCall(call.id, call.from);
+          }
+        } catch {}
+      }, 1200);
 
       // 4. Send a concise Live Call Card + short, natural Turkish Female Voice Greeting directly in WhatsApp
       try {
         const callMsg =
-          `📞 *Çağrınız Yanıtlandı — Sizi Dinliyorum Özgür Bey!*\n\n` +
-          `👩‍💼 _"Efendim Özgür Bey, çağrınızı aldım, sizi dinliyorum. Buyurun, ne yapmamı istersiniz?"_\n\n` +
-          `🎙️ *Doğrudan bu ekrandan sesli mesaj gönderebilir* veya canlı mikrofon ekranından konuşabilirsiniz:\n` +
+          `📞 *Çağrınız Yanıtlandı — Sizi Dinliyorum Onur Bey!*\n\n` +
+          `👩‍💼 _"Buyurun Onur Bey, çağrınızı aldım, sizi dinliyorum. Ne yapmamı istersiniz?"_\n\n` +
+          `🎙️ *Canlı görüşme pencereniz mikrofonu açık olarak başlatıldı.* Doğrudan konuşabilir veya bu sohbetten sesli komut gönderebilirsiniz:\n` +
           `👉 https://obc-asistan.vercel.app/?call=1&autostart=1${BOT_INVISIBLE_MARKER}`;
         const sentCallMsg = await sock.sendMessage(callerJid, {
           text: callMsg,
@@ -987,7 +999,7 @@ async function startWhatsAppBot() {
         await sendFemaleVoiceNoteSafely(
           sock,
           callerJid,
-          "Efendim Özgür Bey, çağrınızı aldım, sizi dinliyorum. Buyurun, ne yapmamı istersiniz?"
+          "Buyurun Onur Bey, çağrınızı aldım, sizi dinliyorum. Ne yapmamı istersiniz?"
         );
       } catch (err) {
         console.error("Çağrı yanıt hatası:", err.message);

@@ -4607,64 +4607,64 @@ export function buildNaturalSpokenReply(res: AssistantProcessResult): string {
   if (res.duplicate || !res.replyText) return "";
 
   if (res.chainedCount && res.chainedCount > 1) {
-    return `Tamamdır Özgür Bey, peş peşe söylediğiniz ${res.chainedCount} komutu da sırasıyla yerine getirdim. Başka bir isteğiniz var mı?`;
+    return `Tamamdır Onur Bey, peş peşe söylediğiniz ${res.chainedCount} komutu da sırasıyla yerine getirdim. Başka bir isteğiniz var mı?`;
   }
 
   if (res.intent === "calendar") {
     const title = res.calendarEvent?.title || res.targetQuery || "etkinlik";
     if (res.action === "delete") {
       return res.syncedToGoogle
-        ? `Tamamdır Özgür Bey, ${title} etkinliğini Google Takvim'inizden sildim. Başka bir isteğiniz var mı?`
-        : `Özgür Bey, takviminizde ${title} adında bir etkinlik bulamadım.`;
+        ? `Tamamdır Onur Bey, ${title} etkinliğini Google Takvim'inizden sildim. Başka bir isteğiniz var mı?`
+        : `Onur Bey, takviminizde ${title} adında bir etkinlik bulamadım.`;
     }
     if (res.action === "update") {
-      return `Tamamdır Özgür Bey, ${title} etkinliğinizi ${res.calendarEvent?.date || ""} saat ${res.calendarEvent?.startTime || ""} olarak güncelledim. Başka bir isteğiniz var mı?`;
+      return `Tamamdır Onur Bey, ${title} etkinliğinizi ${res.calendarEvent?.date || ""} saat ${res.calendarEvent?.startTime || ""} olarak güncelledim. Başka bir isteğiniz var mı?`;
     }
     if (res.action === "share") {
-      return `Tamamdır Özgür Bey, ${title} etkinliği için ilgili kişiye takvim davetiyesini gönderdim. Başka bir isteğiniz var mı?`;
+      return `Tamamdır Onur Bey, ${title} etkinliği için ilgili kişiye takvim davetiyesini gönderdim. Başka bir isteğiniz var mı?`;
     }
-    return `Tamamdır Özgür Bey, ${title} etkinliğini ${res.calendarEvent?.date || "takviminize"} saat ${res.calendarEvent?.startTime || ""} için Google Takvim'inize ekledim. Başka bir isteğiniz var mı?`;
+    return `Tamamdır Onur Bey, ${title} etkinliğini ${res.calendarEvent?.date || "takviminize"} saat ${res.calendarEvent?.startTime || ""} için Google Takvim'inize ekledim. Başka bir isteğiniz var mı?`;
   }
 
   if (res.intent === "contact") {
     const name = res.contact?.name || res.targetQuery || "kişi";
     if (res.action === "delete") {
-      return `Tamamdır Özgür Bey, ${name} kaydını Google Rehber'inizden sildim. Başka bir isteğiniz var mı?`;
+      return `Tamamdır Onur Bey, ${name} kaydını Google Rehber'inizden sildim. Başka bir isteğiniz var mı?`;
     }
     if (res.action === "update") {
-      return `Tamamdır Özgür Bey, ${name} kişisinin bilgilerini Google Rehber'inizde güncelledim. Başka bir isteğiniz var mı?`;
+      return `Tamamdır Onur Bey, ${name} kişisinin bilgilerini Google Rehber'inizde güncelledim. Başka bir isteğiniz var mı?`;
     }
-    return `Tamamdır Özgür Bey, ${name} kişisini Google Rehber'inize kaydettim. Başka bir isteğiniz var mı?`;
+    return `Tamamdır Onur Bey, ${name} kişisini Google Rehber'inize kaydettim. Başka bir isteğiniz var mı?`;
   }
 
   if (res.intent === "note") {
     const content = res.note?.title || res.note?.content || "notunuzu";
-    return `Tamamdır Özgür Bey, ${content} konusunu Google Görevler ve Takvim listenize işledim. Başka bir isteğiniz var mı?`;
+    return `Tamamdır Onur Bey, ${content} konusunu Google Görevler ve Takvim listenize işledim. Başka bir isteğiniz var mı?`;
   }
 
   if (res.intent === "photos") {
     if (res.selectedPhoto) {
-      return `Tamamdır Özgür Bey, seçtiğiniz ${res.selectedPhoto.title} fotoğrafını şimdi sizinle paylaşıyorum. Başka bir isteğiniz var mı?`;
+      return `Tamamdır Onur Bey, seçtiğiniz ${res.selectedPhoto.title} fotoğrafını şimdi sizinle paylaşıyorum. Başka bir isteğiniz var mı?`;
     }
     const count = res.photos?.length || 0;
     if (count > 0) {
-      return `Özgür Bey, ${res.targetQuery || "istediğiniz"} araması için ${count} fotoğraf buldum ve ekrana getirdim. İçlerinden birini paylaşmamı isterseniz numarasını söyleyebilirsiniz.`;
+      return `Onur Bey, ${res.targetQuery || "istediğiniz"} araması için ${count} fotoğraf buldum ve ekrana getirdim. İçlerinden birini paylaşmamı isterseniz numarasını söyleyebilirsiniz.`;
     }
-    return `Özgür Bey, ${res.targetQuery || "bu"} aramasına uygun bir fotoğraf bulamadım. Farklı bir tarih veya isim söylemek ister misiniz?`;
+    return `Onur Bey, ${res.targetQuery || "bu"} aramasına uygun bir fotoğraf bulamadım. Farklı bir tarih veya isim söylemek ister misiniz?`;
   }
 
   if (res.intent === "drive") {
     if (res.selectedDriveFile) {
-      return `Tamamdır Özgür Bey, ${res.selectedDriveFile.name} dosyasını şimdi sizinle paylaşıyorum. Başka bir isteğiniz var mı?`;
+      return `Tamamdır Onur Bey, ${res.selectedDriveFile.name} dosyasını şimdi sizinle paylaşıyorum. Başka bir isteğiniz var mı?`;
     }
     const count = res.driveFiles?.length || 0;
     if (count > 0) {
-      return `Özgür Bey, Google Drive'da ${res.targetQuery || "istediğiniz"} ile ilgili ${count} dosya buldum ve seçenekler halinde listeledim. Hangisini paylaşmamı istersiniz?`;
+      return `Onur Bey, Google Drive'da ${res.targetQuery || "istediğiniz"} ile ilgili ${count} dosya buldum ve seçenekler halinde listeledim. Hangisini paylaşmamı istersiniz?`;
     }
-    return `Özgür Bey, Google Drive'da ${res.targetQuery || "bu"} aramasına uygun bir dosya bulamadım. Başka bir dosya adı söylemek ister misiniz?`;
+    return `Onur Bey, Google Drive'da ${res.targetQuery || "bu"} aramasına uygun bir dosya bulamadım. Başka bir dosya adı söylemek ister misiniz?`;
   }
 
-  return "Özgür Bey, sizi dinliyorum. Takvim, rehber, görev, Google Photos veya Drive için ne yapmamı istersiniz?";
+  return "Buyurun Onur Bey, sizi dinliyorum. Takvim, rehber, görev, Google Photos veya Drive için ne yapmamı istersiniz?";
 }
 
 export async function processAssistantInput(params: {
