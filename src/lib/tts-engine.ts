@@ -165,17 +165,10 @@ export async function generateTurkishFemaleVoiceAudio(rawText: string): Promise<
     return cached;
   }
 
-  // 1. Try Gemini 2.5 Flash Preview Neural TTS (Aoede) with a fast 2.2s budget, while also keeping background warm-up
-  const geminiPromise = fetchGeminiNeuralFemaleWav(cleaned, 4800);
-  const fastBudgetPromise = new Promise<null>((resolve) =>
-    setTimeout(() => resolve(null), 1600)
-  );
-  const quickNeural = await Promise.race([geminiPromise, fastBudgetPromise]);
-  if (quickNeural) {
-    return quickNeural;
-  }
+  // Trigger Gemini 2.5 Flash Neural TTS (Aoede) in parallel (warms cache with studio WAV)
+  const geminiPromise = fetchGeminiNeuralFemaleWav(cleaned, 5000);
 
-  // 2. Fast MP3 Turkish Female TTS Fallback
+  // Also fetch ultra-low-latency MP3 in parallel so interactive calls respond in <300ms
   const chunks = splitTextIntoTtsChunks(cleaned, 180);
   const buffers: Buffer[] = [];
 
@@ -201,9 +194,16 @@ export async function generateTurkishFemaleVoiceAudio(rawText: string): Promise<
     }
   }
 
-  if (buffers.length === 0) return null;
-  return {
-    buffer: Buffer.concat(buffers),
-    mimeType: "audio/mpeg",
-  };
+  if (buffers.length > 0) {
+    const mp3Result = {
+      buffer: Buffer.concat(buffers),
+      mimeType: "audio/mpeg",
+    };
+    if (!ttsMemoryCache.has(cleaned)) {
+      ttsMemoryCache.set(cleaned, mp3Result);
+    }
+    return ttsMemoryCache.get(cleaned) || mp3Result;
+  }
+
+  return await geminiPromise;
 }
