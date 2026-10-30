@@ -134,16 +134,18 @@ export function isHangupOrStopCommand(rawText?: string): boolean {
     .trim();
   if (!norm) return false;
 
-  // Never trigger hangup on instruction echoes or when the user is issuing a calendar/note/drive/photo/contact command
+  // Never trigger hangup on instruction echoes
   if (
-    /\b(?:diyebilirsiniz|kapatmak\s+icin|durdurmak\s+icin)\b/.test(norm)
+    /\b(?:diyebilirsiniz|kapatmak\s+icin|durdurmak\s+icin|sonlandirmak\s+icin)\b/.test(
+      norm
+    )
   ) {
     return false;
   }
 
-  // Explicit multi-word hangup phrases always win
+  // 0. Explicit "Tamam Donna" / "Kapat Donna" / "Sonlandır Donna" / "Durdur Donna" or multi-word hangup phrases always win
   if (
-    /\b(?:sohbeti\s+ve\s+telefonu\s+kapat\w*|telefonu\s+ve\s+sohbeti\s+kapat\w*|telefonu\s+kapat\w*|sohbeti\s+kapat\w*|aramayi\s+kapat\w*|aramayi\s+sonlandir\w*|cagriyi\s+kapat\w*|cagriyi\s+sonlandir\w*|asistani\s+kapat\w*|asistani\s+durdur\w*|dinlemeyi\s+kapat\w*|dinlemeyi\s+durdur\w*|sesli\s+aramayi\s+kapat\w*)\b/.test(
+    /\b(?:tamam\s+donna|tamam\s+dona|tamam\s+donma|tesekkurler\s+donna|tesekkurler\s+dona|sag\s*ol\s+donna|gorusuruz\s+donna|hosca\s*kal\s+donna|donna\s+kapat\w*|donna\s+sonlandir\w*|donna\s+durdur\w*|kapat\s+donna|sonlandir\s+donna|durdur\s+donna|sohbeti\s+ve\s+telefonu\s+kapat\w*|telefonu\s+ve\s+sohbeti\s+kapat\w*|telefonu\s+kapat\w*|sohbeti\s+kapat\w*|sohbeti\s+sonlandir\w*|iletisimi\s+sonlandir\w*|aramayi\s+kapat\w*|aramayi\s+sonlandir\w*|cagriyi\s+kapat\w*|cagriyi\s+sonlandir\w*|asistani\s+kapat\w*|asistani\s+durdur\w*|dinlemeyi\s+kapat\w*|dinlemeyi\s+durdur\w*|sesli\s+aramayi\s+kapat\w*)\b/.test(
       norm
     )
   ) {
@@ -159,9 +161,9 @@ export function isHangupOrStopCommand(rawText?: string): boolean {
     return false;
   }
 
-  // 1. Standalone or short direct stop/hangup commands ("stop", "dur", "durdur", "kapat", "sohbeti kapat", "telefonu kapat")
+  // 1. Standalone or short direct stop/hangup commands ("tamam donna", "kapat", "sonlandır", "durdur", "dur", "stop")
   if (
-    /^(?:lutfen\s+|simdi\s+|hemen\s+|artik\s+|tamam\s+|tesekkurler\s+|peki\s+|asistan\s+|obc\s+|onur\s+bey\s+)*(?:stop|dur|durdur|kapat|kapatalim|bitir|bitirelim|sonlandir|sus|yeter|bu\s+kadar\s+yeter|hosca\s*kal|gorusuruz|iyi\s+gunler\s+kapat)(?:\s+lutfen|\s+artik|\s+hemen|\s+simdi|\s+asistan|\s+obc|\s+onur\s+bey)*$/.test(
+    /^(?:lutfen\s+|simdi\s+|hemen\s+|artik\s+|tamam\s+|tesekkurler\s+|peki\s+|donna\s+|dona\s+|asistan\s+|obc\s+|onur\s+bey\s+)*(?:tamam\s+donna|tamam\s+dona|kapat|kapatalim|sonlandir|sonlandiralim|durdur|durduralim|stop|dur|bitir|bitirelim|sus|yeter|bu\s+kadar\s+yeter|hosca\s*kal|gorusuruz|iyi\s+gunler\s+kapat)(?:\s+donna|\s+dona|\s+lutfen|\s+artik|\s+hemen|\s+simdi|\s+asistan|\s+obc|\s+onur\s+bey)*$/.test(
       norm
     )
   ) {
@@ -172,10 +174,10 @@ export function isHangupOrStopCommand(rawText?: string): boolean {
   const words = norm.split(/\s+/);
   if (
     words.length <= 8 &&
-    (/\b(?:telefon\w*|sohbet\w*|arama\w*|cagri\w*|asistan\w*|dinleme\w*|mikrofon\w*|sesli\s+arama\w*|sesli\s+asistan\w*)\b.*\b(?:kapat\w*|durdur\w*|dur\b|bitir\w*|sonlandir\w*|kes\w*|stop\b)\b/.test(
+    (/\b(?:donna|dona|telefon\w*|sohbet\w*|iletisim\w*|arama\w*|cagri\w*|asistan\w*|dinleme\w*|mikrofon\w*|sesli\s+arama\w*|sesli\s+asistan\w*)\b.*\b(?:kapat\w*|durdur\w*|dur\b|bitir\w*|sonlandir\w*|kes\w*|stop\b)\b/.test(
       norm
     ) ||
-      /\b(?:kapat\w*|durdur\w*|dur\b|bitir\w*|sonlandir\w*|kes\w*|stop\b)\b.*\b(?:telefon\w*|sohbet\w*|arama\w*|cagri\w*|asistan\w*|dinleme\w*|mikrofon\w*)\b/.test(
+      /\b(?:kapat\w*|durdur\w*|dur\b|bitir\w*|sonlandir\w*|kes\w*|stop\b)\b.*\b(?:donna|dona|telefon\w*|sohbet\w*|iletisim\w*|arama\w*|cagri\w*|asistan\w*|dinleme\w*|mikrofon\w*)\b/.test(
         norm
       ))
   ) {
@@ -183,6 +185,70 @@ export function isHangupOrStopCommand(rawText?: string): boolean {
   }
 
   return false;
+}
+
+export function isAddressingOwnerNameAsGreeting(rawText?: string): boolean {
+  if (!rawText) return false;
+  if (isBotReplyEcho(rawText)) return false;
+  const norm = rawText
+    .toLocaleLowerCase("tr-TR")
+    .replace(/ç/g, "c")
+    .replace(/ğ/g, "g")
+    .replace(/ı/g, "i")
+    .replace(/ö/g, "o")
+    .replace(/ş/g, "s")
+    .replace(/ü/g, "u")
+    .replace(/[^a-z0-9\s]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+  if (!norm) return false;
+
+  // Must NOT contain an explicit workspace creation/modification/search verb or noun
+  if (
+    /\b(?:toplanti\w*|etkinlik\w*|etkinlig\w*|takvim\w*|ajanda\w*|randevu\w*|not\b|notu\b|notunu\b|gorev\w*|hatirlat\w*|ekle\w*|olustur\w*|planla\w*|ayarla\w*|kaydet\w*|sil\w*|iptal\w*|guncelle\w*|rehber\w*|dosya\w*|belge\w*|fotograf\w*|resim\w*|paylas\w*|gonder\w*|getir\w*|bul\w*|listele\w*|saat\b|yarin\b|bugun\b)\b/.test(
+      norm
+    )
+  ) {
+    return false;
+  }
+
+  // Matches when an external contact addresses "Onur Bey", "Baran Bey", "Çağlar Bey", or "Obcag Bey" (or STT variations)
+  return (
+    norm.split(/\s+/).length <= 12 &&
+    /\b(?:onur\s+bey\w*|baran\s+bey\w*|caglar\s+bey\w*|obcag\w*(?:\s+bey\w*)?|obcak\w*(?:\s+bey\w*)?|onur\s+baran\w*|dr\s+onur\w*)\b/.test(
+      norm
+    )
+  );
+}
+
+export function isCallingDonnaWakeWord(rawText?: string): boolean {
+  if (!rawText) return false;
+  if (isBotReplyEcho(rawText)) return false;
+  const norm = rawText
+    .toLocaleLowerCase("tr-TR")
+    .replace(/ç/g, "c")
+    .replace(/ğ/g, "g")
+    .replace(/ı/g, "i")
+    .replace(/ö/g, "o")
+    .replace(/ş/g, "s")
+    .replace(/ü/g, "u")
+    .replace(/[^a-z0-9\s]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+  if (!norm) return false;
+
+  if (
+    /\b(?:toplanti\w*|etkinlik\w*|etkinlig\w*|takvim\w*|ajanda\w*|randevu\w*|not\b|notu\b|notunu\b|gorev\w*|hatirlat\w*|ekle\w*|olustur\w*|planla\w*|ayarla\w*|kaydet\w*|sil\w*|iptal\w*|guncelle\w*|rehber\w*|dosya\w*|belge\w*|fotograf\w*|resim\w*|paylas\w*|gonder\w*|getir\w*|bul\w*|listele\w*|saat\b|yarin\b|bugun\b|kapat\w*|sonlandir\w*|durdur\w*|tamam\s+donna|tamam\s+dona)\b/.test(
+      norm
+    )
+  ) {
+    return false;
+  }
+
+  return (
+    norm.split(/\s+/).length <= 10 &&
+    /\b(?:donna|dona|donma)\b/.test(norm)
+  );
 }
 
 export function isPauseListeningCommand(rawText?: string): boolean {
@@ -280,6 +346,11 @@ export function isBotReplyEcho(rawText?: string): boolean {
     norm.includes("sesinizi cok net duyuyorum") ||
     norm.includes("sesli aramayi ve dinlemeyi hemen kapatiyorum") ||
     norm.includes("sesli aramayi hemen kapatiyorum") ||
+    norm.includes("iletisimi sonlandirip asistani kapatiyorum") ||
+    norm.includes("ben onur beyin asistani donna") ||
+    norm.includes("ben asistaniniz donna") ||
+    norm.includes("kendisi su an musait degil") ||
+    norm.includes("yapabildiklerim takvim ve ajanda yonetimi") ||
     norm.includes("dinlemeyi duraklattim")
   );
 }
@@ -1230,7 +1301,10 @@ export function parseCommandLocally(
         ""
       )
       .replace(/\bsonra\s+bir\s+(?:kullanıcı|kullanici|kişi|kisi)\b.*$/i, "")
-      .replace(/\b(?:onur\s+bey['’]?in|onur['’]?un)\b/gi, " ")
+      .replace(
+        /\b(?:onur\s+bey['’]?(?:in|e|a)?|baran\s+bey['’]?(?:in|e|a)?|çağlar\s+bey['’]?(?:in|e|a)?|caglar\s+bey['’]?(?:in|e|a)?|obcag\s+bey['’]?(?:in|e|a)?|obcağ\s+bey['’]?(?:in|e|a)?|onur['’]?un|donna|dona)\b/gi,
+        " "
+      )
       .replace(
         /(?:^|\s)(ajandasına|ajandasina|ajandama|ajandaya|ajandada|ajandadan|ajanda|takvimine|takvimime|takvimdeki|takvimden|takvime|takvimde|takvim|notunu|notu|not|için|icin|gibi|bir\s+tane|bir\s+adet|etkinlik|etkinliği|etkinligi|etkinliğini|etkinligini|toplantı|toplanti|toplantısı|toplantisi|toplantısını|toplantisini|toplantıyı|toplantiyi|randevu|randevusu|randevusunu|görev|gorev|görevi|gorevi|görevini|gorevini|konularını|konularini|konuşacağız|konusacagiz|girer\s*misin\w*|girermisin\w*|ekler\s*misin\w*|eklermisin\w*|açar\s*mısın\w*|acarmisin\w*|yapabilir\s*misin\w*|yapar\s*mısın\w*|girip|gir|planla\w*|ayarla\w*|ekleyip|eklemeni|ekle|oluşturup|oluşturmanı|olusturmani|oluştur|olustur|kaydedip|kaydet\w*|yaz\w*|düş\w*|dus\w*|bırak\w*|birak\w*|açmanı|acmani|açıp|aç|ac|sil|kaldır|kaldir|iptal\s*et|iptal|güncelle|guncelle|değiştir|degistir|ertele|taşı|tasi|öne|one|ileriye|ileri|geriye|geri|sonraya|çekmeni|cekmeni|çek|cek|almanı|al|istiyorum|isterim|lütfen|lutfen|gönder\w*|gonder\w*|davet\s*et|davet|paylaş\w*|paylas\w*|adresine|hesabına|hesabina|gmail|mailine|epostasına|e-postasına|epostaya|e-postaya|kullanıcısına|kişisine|eşim|esim|rehberdeki|olan|bu|bana|hemen|şimdi|simdi|daki|deki|taki|teki)(?=\s|$|[.,;:!?'’])/gi,
         " "
@@ -5262,7 +5336,7 @@ async function processAssistantInputCore(params: {
   // Normalize spoken Turkish numbers & dates ("on yedi eylül iki bin yirmi altı" -> "17 Eylül 2026", "beş numarayı paylaş" -> "5 numarayı paylaş")
   transcript = normalizeSpokenTurkishNumbersAndDates(transcript);
 
-  // ==================== 0. INSTANT STOP / HANGUP / PAUSE MODE INTERCEPTION ====================
+  // ==================== 0. INSTANT STOP / HANGUP / PAUSE MODE / GREETING INTERCEPTION ====================
   if (isHangupOrStopCommand(transcript)) {
     terminateWhatsAppCall();
     return {
@@ -5273,11 +5347,11 @@ async function processAssistantInputCore(params: {
       usedGemini,
       syncedToGoogle: false,
       replyText:
-        `🛑 *Sesli Arama ve Asistan Dinleme Modu Kapatıldı.*\n\n` +
-        `👩‍💼 _"Tamamdır Onur Bey, sesli aramayı ve dinlemeyi hemen kapatıyorum. İyi günler dilerim."_\n\n` +
-        `_Tekrar başlatmak istediğinizde arayabilir veya komut gönderebilirsiniz._`,
+        `🛑 *İletişim Sonlandırıldı — Asistan Donna Kapatıldı.*\n\n` +
+        `👩‍💼 _"Tamamdır, iletişimi sonlandırıp asistanı kapatıyorum. İyi günler dilerim!"_\n\n` +
+        `_Tekrar başlatmak istediğinizde **"Donna"** diyerek veya arayarak ulaşabilirsiniz._`,
       spokenReply:
-        "Tamamdır Onur Bey, sesli aramayı ve dinlemeyi hemen kapatıyorum. İyi günler dilerim.",
+        "Tamamdır, iletişimi sonlandırıp asistanı kapatıyorum. İyi günler dilerim.",
     };
   }
 
@@ -5290,9 +5364,61 @@ async function processAssistantInputCore(params: {
       usedGemini,
       syncedToGoogle: false,
       replyText:
-        `⏸️ *Asistan Dinleme Modu Duraklatıldı (Sessize Alındı).*\n\n` +
+        `⏸️ *Asistan Donna Dinleme Modu Duraklatıldı (Sessize Alındı).*\n\n` +
         `👩‍💼 _"Tamamdır Onur Bey, dinlemeyi duraklattım."_`,
       spokenReply: "Tamamdır Onur Bey, dinlemeyi duraklattım.",
+    };
+  }
+
+  // External contact addressing "Onur Bey", "Baran Bey", "Çağlar Bey", or "Obcag Bey"
+  if (isAddressingOwnerNameAsGreeting(transcript)) {
+    const extGreeting =
+      "Merhaba, ben Onur Beyin asistanı Donna, kendisi şu an müsait değil, size nasıl yardımcı olabilirim? Yapabildiklerim: Takvim ve ajanda yönetimi, kontaklar ve görevleri yönetebiliyorum.";
+    return {
+      transcript,
+      intent: "help",
+      action: "share",
+      usedGemini,
+      syncedToGoogle: false,
+      replyText:
+        `👩‍💼 *Donna — Onur Bey'in Yapay Zeka Asistanı*\n\n` +
+        `_"${extGreeting}"_\n\n` +
+        `🛑 _Sohbeti sonlandırmak için **"Tamam Donna"**, **"Kapat"**, **"Sonlandır"** veya **"Durdur"** diyebilirsiniz._`,
+      spokenReply: extGreeting,
+    };
+  }
+
+  // Calling the assistant by her name "Donna" ("Donna", "Merhaba Donna", "Hey Donna", etc.)
+  if (isCallingDonnaWakeWord(transcript)) {
+    if (params.isExternalCaller) {
+      const extGreeting =
+        "Merhaba, ben Onur Beyin asistanı Donna, kendisi şu an müsait değil, size nasıl yardımcı olabilirim? Yapabildiklerim: Takvim ve ajanda yönetimi, kontaklar ve görevleri yönetebiliyorum.";
+      return {
+        transcript,
+        intent: "help",
+        action: "share",
+        usedGemini,
+        syncedToGoogle: false,
+        replyText:
+          `👩‍💼 *Donna — Onur Bey'in Yapay Zeka Asistanı*\n\n` +
+          `_"${extGreeting}"_\n\n` +
+          `🛑 _Sohbeti sonlandırmak için **"Tamam Donna"**, **"Kapat"**, **"Sonlandır"** veya **"Durdur"** diyebilirsiniz._`,
+        spokenReply: extGreeting,
+      };
+    }
+    const ownerDonnaGreeting =
+      "Buyurun Onur Bey, ben asistanınız Donna, sizi dinliyorum. Size nasıl yardımcı olabilirim? Yapabildiklerim: Takvim ve ajanda yönetimi, kontaklar ve görevleri yönetebiliyorum.";
+    return {
+      transcript,
+      intent: "help",
+      action: "share",
+      usedGemini,
+      syncedToGoogle: false,
+      replyText:
+        `👩‍💼 *Donna Sizi Dinliyor, Onur Bey!*\n\n` +
+        `_"${ownerDonnaGreeting}"_\n\n` +
+        `🛑 _Sohbeti sonlandırmak için **"Tamam Donna"**, **"Kapat"**, **"Sonlandır"** veya **"Durdur"** diyebilirsiniz._`,
+      spokenReply: ownerDonnaGreeting,
     };
   }
 
@@ -6418,13 +6544,31 @@ async function processAssistantInputCore(params: {
   }
 
   const isConversationalGreeting =
-    transcript.trim().split(/\s+/).length <= 6 &&
+    transcript.trim().split(/\s+/).length <= 8 &&
     !hasRoomChatterWords &&
-    /\b(merhaba\w*|selam\w*|alo\w*|efendim|asistan\w*|iyi\s+gunler|gunaydin|iyi\s+aksamlar|nasilsin\w*|duyuyor\s*musun\w*|sesim\s+geliyor\s*mu|orada\s*misin\w*|oradamisin\w*|dinliyor\s*musun\w*|kimsin\w*|yardim\w*|ne\s+yapabilirsin\w*)\b/.test(
+    /\b(merhaba\w*|selam\w*|alo\w*|efendim|donna|dona|asistan\w*|iyi\s+gunler|gunaydin|iyi\s+aksamlar|nasilsin\w*|duyuyor\s*musun\w*|sesim\s+geliyor\s*mu|orada\s*misin\w*|oradamisin\w*|dinliyor\s*musun\w*|kimsin\w*|yardim\w*|ne\s+yapabilirsin\w*)\b/.test(
       normTranscriptForAction
     );
 
   if (isConversationalGreeting) {
+    if (params.isExternalCaller || callerContact.isExternalFriend) {
+      const extGreeting =
+        "Merhaba, ben Onur Beyin asistanı Donna, kendisi şu an müsait değil, size nasıl yardımcı olabilirim? Yapabildiklerim: Takvim ve ajanda yönetimi, kontaklar ve görevleri yönetebiliyorum.";
+      return {
+        transcript,
+        intent: "help",
+        action: "share",
+        usedGemini,
+        syncedToGoogle: false,
+        replyText:
+          `👩‍💼 *Donna — Onur Bey'in Yapay Zeka Asistanı*\n\n` +
+          `_"${extGreeting}"_\n\n` +
+          `🛑 _Sohbeti sonlandırmak için **"Tamam Donna"**, **"Kapat"**, **"Sonlandır"** veya **"Durdur"** diyebilirsiniz._`,
+        spokenReply: extGreeting,
+      };
+    }
+    const ownerGreeting =
+      "Buyurun Onur Bey, ben asistanınız Donna, sizi dinliyorum. Size nasıl yardımcı olabilirim? Yapabildiklerim: Takvim ve ajanda yönetimi, kontaklar ve görevleri yönetebiliyorum.";
     return {
       transcript,
       intent: "help",
@@ -6432,10 +6576,10 @@ async function processAssistantInputCore(params: {
       usedGemini,
       syncedToGoogle: false,
       replyText:
-        `👩‍💼 *Canlı Sesli Asistanınız Sizi Dinliyor, Onur Bey!*\n\n` +
-        `_"Evet Onur Bey, sesinizi çok net duyuyorum, sizi dinliyorum. Takvim, rehber, görevler, Google Photos veya Drive için ne yapmamı istersiniz?"_`,
-      spokenReply:
-        "Evet Onur Bey, sesinizi çok net duyuyorum, sizi dinliyorum. Takvim, rehber, görevler, Google Photos veya Drive için ne yapmamı istersiniz?",
+        `👩‍💼 *Donna Sizi Dinliyor, Onur Bey!*\n\n` +
+        `_"${ownerGreeting}"_\n\n` +
+        `🛑 _Sohbeti sonlandırmak için **"Tamam Donna"**, **"Kapat"**, **"Sonlandır"** veya **"Durdur"** diyebilirsiniz._`,
+      spokenReply: ownerGreeting,
     };
   }
 

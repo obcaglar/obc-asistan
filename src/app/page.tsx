@@ -212,7 +212,7 @@ export default function HomePage() {
     // Preload female voice greeting into browser memory so "Sesli Ara" speaks with 0ms network delay
     fetch(
       `/api/tts?text=${encodeURIComponent(
-        "Buyurun Onur Bey, çağrınızı aldım, sizi dinliyorum. Ne yapmamı istersiniz?"
+        "Merhaba Onur Bey, ben asistanınız Donna, sizi dinliyorum. Size nasıl yardımcı olabilirim?"
       )}`
     )
       .then((r) => (r.ok ? r.blob() : null))
@@ -508,6 +508,7 @@ export default function HomePage() {
           isVoice: params.isVoice,
           fromLiveCall: params.fromLiveCall,
           senderName: callCallerNameRef.current || undefined,
+          isExternalCaller: Boolean(callCallerNameRef.current),
           credentials: {
             geminiApiKey: wizGemini || undefined,
             googleClientId: wizGClient || undefined,
@@ -780,7 +781,7 @@ export default function HomePage() {
 
     try {
       const isDefaultGreeting =
-        cleanForSpeech.includes("çağrınızı aldım") &&
+        cleanForSpeech.includes("ben asistanınız Donna") &&
         Boolean(callPreloadedGreetingUrlRef.current);
       const ttsUrl = isDefaultGreeting
         ? callPreloadedGreetingUrlRef.current
@@ -833,13 +834,15 @@ export default function HomePage() {
     if (!norm) return false;
 
     if (
-      /\b(?:diyebilirsiniz|kapatmak\s+icin|durdurmak\s+icin)\b/.test(norm)
+      /\b(?:diyebilirsiniz|kapatmak\s+icin|durdurmak\s+icin|sonlandirmak\s+icin)\b/.test(
+        norm
+      )
     ) {
       return false;
     }
 
     if (
-      /\b(?:sohbeti\s+ve\s+telefonu\s+kapat\w*|telefonu\s+ve\s+sohbeti\s+kapat\w*|telefonu\s+kapat\w*|sohbeti\s+kapat\w*|aramayi\s+kapat\w*|aramayi\s+sonlandir\w*|cagriyi\s+kapat\w*|cagriyi\s+sonlandir\w*|asistani\s+kapat\w*|asistani\s+durdur\w*|dinlemeyi\s+kapat\w*|dinlemeyi\s+durdur\w*|sesli\s+aramayi\s+kapat\w*)\b/.test(
+      /\b(?:tamam\s+donna|tamam\s+dona|tamam\s+donma|tesekkurler\s+donna|tesekkurler\s+dona|sag\s*ol\s+donna|gorusuruz\s+donna|hosca\s*kal\s+donna|donna\s+kapat\w*|donna\s+sonlandir\w*|donna\s+durdur\w*|kapat\s+donna|sonlandir\s+donna|durdur\s+donna|sohbeti\s+ve\s+telefonu\s+kapat\w*|telefonu\s+ve\s+sohbeti\s+kapat\w*|telefonu\s+kapat\w*|sohbeti\s+kapat\w*|sohbeti\s+sonlandir\w*|iletisimi\s+sonlandir\w*|aramayi\s+kapat\w*|aramayi\s+sonlandir\w*|cagriyi\s+kapat\w*|cagriyi\s+sonlandir\w*|asistani\s+kapat\w*|asistani\s+durdur\w*|dinlemeyi\s+kapat\w*|dinlemeyi\s+durdur\w*|sesli\s+aramayi\s+kapat\w*)\b/.test(
         norm
       )
     ) {
@@ -855,7 +858,7 @@ export default function HomePage() {
     }
 
     if (
-      /^(?:lutfen\s+|simdi\s+|hemen\s+|artik\s+|tamam\s+|tesekkurler\s+|peki\s+|asistan\s+|obc\s+|onur\s+bey\s+)*(?:stop|dur|durdur|kapat|kapatalim|bitir|bitirelim|sonlandir|sus|yeter|bu\s+kadar\s+yeter|hosca\s*kal|gorusuruz|iyi\s+gunler\s+kapat)(?:\s+lutfen|\s+artik|\s+hemen|\s+simdi|\s+asistan|\s+obc|\s+onur\s+bey)*$/.test(
+      /^(?:lutfen\s+|simdi\s+|hemen\s+|artik\s+|tamam\s+|tesekkurler\s+|peki\s+|donna\s+|dona\s+|asistan\s+|obc\s+|onur\s+bey\s+)*(?:tamam\s+donna|tamam\s+dona|kapat|kapatalim|sonlandir|sonlandiralim|durdur|durduralim|stop|dur|bitir|bitirelim|sus|yeter|bu\s+kadar\s+yeter|hosca\s*kal|gorusuruz|iyi\s+gunler\s+kapat)(?:\s+donna|\s+dona|\s+lutfen|\s+artik|\s+hemen|\s+simdi|\s+asistan|\s+obc|\s+onur\s+bey)*$/.test(
         norm
       )
     ) {
@@ -865,10 +868,10 @@ export default function HomePage() {
     const words = norm.split(/\s+/);
     if (
       words.length <= 8 &&
-      (/\b(?:telefon\w*|sohbet\w*|arama\w*|cagri\w*|asistan\w*|dinleme\w*|mikrofon\w*|sesli\s+arama\w*|sesli\s+asistan\w*)\b.*\b(?:kapat\w*|durdur\w*|dur\b|bitir\w*|sonlandir\w*|kes\w*|stop\b)\b/.test(
+      (/\b(?:donna|dona|telefon\w*|sohbet\w*|iletisim\w*|arama\w*|cagri\w*|asistan\w*|dinleme\w*|mikrofon\w*|sesli\s+arama\w*|sesli\s+asistan\w*)\b.*\b(?:kapat\w*|durdur\w*|dur\b|bitir\w*|sonlandir\w*|kes\w*|stop\b)\b/.test(
         norm
       ) ||
-        /\b(?:kapat\w*|durdur\w*|dur\b|bitir\w*|sonlandir\w*|kes\w*|stop\b)\b.*\b(?:telefon\w*|sohbet\w*|arama\w*|cagri\w*|asistan\w*|dinleme\w*|mikrofon\w*)\b/.test(
+        /\b(?:kapat\w*|durdur\w*|dur\b|bitir\w*|sonlandir\w*|kes\w*|stop\b)\b.*\b(?:donna|dona|telefon\w*|sohbet\w*|iletisim\w*|arama\w*|cagri\w*|asistan\w*|dinleme\w*|mikrofon\w*)\b/.test(
           norm
         ))
     ) {
@@ -916,11 +919,11 @@ export default function HomePage() {
     }
     setCallLiveTranscript(
       spokenText
-        ? `🛑 "${spokenText}" — Arama ve Asistan Kapatılıyor...`
-        : "🛑 Sesli Arama ve Asistan Kapatılıyor..."
+        ? `🛑 "${spokenText}" — İletişim Sonlandırılıyor & Donna Kapatılıyor...`
+        : "🛑 İletişim Sonlandırılıyor & Donna Kapatılıyor..."
     );
     setCallStatus("paused");
-    showToast("🛑 Sesli arama ve asistan dinleme modu kapatıldı.");
+    showToast("🛑 İletişim sonlandırıldı, asistan Donna kapatıldı.");
 
     fetch("/api/assistant", {
       method: "POST",
@@ -928,14 +931,26 @@ export default function HomePage() {
       body: JSON.stringify({ action: "end_call", notifyWhatsApp: true }),
     }).catch(() => {});
 
+    const closePopupIfCallMode = () => {
+      endWhatsAppVoiceCall(false);
+      if (
+        typeof window !== "undefined" &&
+        window.location.search.includes("call=1")
+      ) {
+        try {
+          window.close();
+        } catch {}
+      }
+    };
+
     speakTurkishText(
-      "Tamamdır Onur Bey, sesli aramayı ve dinlemeyi hemen kapatıyorum. İyi günler dilerim.",
+      "Tamamdır, iletişimi sonlandırıp asistanı kapatıyorum. İyi günler dilerim.",
       () => {
-        endWhatsAppVoiceCall(false);
+        closePopupIfCallMode();
       }
     );
     setTimeout(() => {
-      endWhatsAppVoiceCall(false);
+      closePopupIfCallMode();
     }, 3200);
   }
 
@@ -1445,14 +1460,15 @@ export default function HomePage() {
     }, 1000);
 
     setCallStatus("speaking");
-    speakTurkishText(
-      "Buyurun Onur Bey, çağrınızı aldım, sizi dinliyorum. Ne yapmamı istersiniz?",
-      () => {
-        if (callActiveRef.current) {
-          startCallListeningCycle();
-        }
+    const isExtCaller = Boolean(callCallerNameRef.current);
+    const initialGreeting = isExtCaller
+      ? "Merhaba, ben Onur Beyin asistanı Donna, kendisi şu an müsait değil, size nasıl yardımcı olabilirim? Yapabildiklerim: Takvim ve ajanda yönetimi, kontaklar ve görevleri yönetebiliyorum."
+      : "Merhaba Onur Bey, ben asistanınız Donna, sizi dinliyorum. Size nasıl yardımcı olabilirim?";
+    speakTurkishText(initialGreeting, () => {
+      if (callActiveRef.current) {
+        startCallListeningCycle();
       }
-    );
+    });
   }
 
   function endWhatsAppVoiceCall(notifyServer = true) {

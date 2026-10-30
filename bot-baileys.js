@@ -645,6 +645,14 @@ async function startWhatsAppBot() {
         lower.includes("numaralı") ||
         lower.includes("ardından") ||
         lower.includes("daha sonra") ||
+        lower.includes("donna") ||
+        lower.includes("dona") ||
+        lower.includes("onur bey") ||
+        lower.includes("baran bey") ||
+        lower.includes("çağlar bey") ||
+        lower.includes("caglar bey") ||
+        lower.includes("obcag") ||
+        lower.includes("obcağ") ||
         lower.includes("kapat") ||
         lower.includes("durdur") ||
         lower.includes("dur") ||
@@ -1126,24 +1134,25 @@ async function startWhatsAppBot() {
         } catch {}
       }, 1200);
 
-      // 4. Send a 1-tap Live Call Card (text only with BOT_INVISIBLE_MARKER, never audio files) so Mobile & Web WhatsApp users see how to use their phone's microphone or WhatsApp voice notes
+      // 4. Send a 1-tap Live Call Card so Mobile & Web WhatsApp users see Donna's greeting and how to use their phone's microphone or WhatsApp voice notes
       try {
         const mobileCallUrl = `https://obc-asistan.vercel.app/?call=1&autostart=1${callerQuery}`;
+        const extSpokenGreeting =
+          "Merhaba, ben Onur Beyin asistanı Donna, kendisi şu an müsait değil, size nasıl yardımcı olabilirim? Yapabildiklerim: Takvim ve ajanda yönetimi, kontaklar ve görevleri yönetebiliyorum.";
         const callMsg = isExternalCall
-          ? `📞 *OBC Asistan — Çağrınız Alındı (${callerDisplay})*\n\n` +
-            `👩‍💼 _"Merhaba, ben Dr. Onur Baran Çağlar'ın yapay zeka asistanıyım. Onur Bey'in ajandasına ve takvimine not veya etkinlik eklemek için sizi dinliyorum."_\n\n` +
-            `📱 *1. Cep Telefonunuzun Mikrofonuyla Canlı Konuşmak İçin:* Aşağıdaki bağlantıya dokunarak telefonunuzda canlı sesli asistan ekranını açın:\n` +
+          ? `📞 *Donna — Onur Bey'in Asistanı (${callerDisplay})*\n\n` +
+            `👩‍💼 _"${extSpokenGreeting}"_\n\n` +
+            `📱 *1. Cep Telefonunuzun Mikrofonuyla Canlı Konuşmak İçin:* Aşağıdaki bağlantıya dokunarak telefonunuzda canlı sesli asistan Donna ekranını açın:\n` +
             `👉 ${mobileCallUrl}\n\n` +
-            `🎙️ *2. Veya Doğrudan Bu WhatsApp Sohbetinden:* Bağlantıya tıklamadan bu sohbette **🎙️ Sesli Mesaj (Mikrofon)** tuşuna basıp konuşarak ya da yazarak Onur Bey'in ajandasına doğrudan not/randevu ekleyebilirsiniz.\n` +
-            `_(Örn: "Onur Bey'in ajandasına yarın saat 15:00 için proje toplantısı notu ekle")_\n\n` +
-            `🛑 *Kapatmak İçin:* *"Telefonu kapat"*, *"Dur"* veya *"Stop"* diyebilirsiniz.${BOT_INVISIBLE_MARKER}`
-          : `📞 *Çağrınız Yanıtlandı — Sizi Dinliyorum Onur Bey!*\n\n` +
-            `👩‍💼 _"Buyurun Onur Bey, çağrınızı aldım, sizi dinliyorum. Ne yapmamı istersiniz?"_\n\n` +
+            `🎙️ *2. Veya Doğrudan Bu WhatsApp Sohbetinden:* Bağlantıya tıklamadan bu sohbette **🎙️ Sesli Mesaj (Mikrofon)** tuşuna basıp konuşarak ya da yazarak Onur Bey'in ajandasına doğrudan not/randevu ekleyebilirsiniz.\n\n` +
+            `🛑 *Sohbeti Sonlandırmak İçin:* *"Tamam Donna"*, *"Kapat"*, *"Sonlandır"* veya *"Durdur"* diyebilirsiniz.${BOT_INVISIBLE_MARKER}`
+          : `📞 *Donna Sizi Dinliyor, Onur Bey!*\n\n` +
+            `👩‍💼 _"Merhaba Onur Bey, ben asistanınız Donna, sizi dinliyorum. Size nasıl yardımcı olabilirim?"_\n\n` +
             `📱 *1. Cep Telefonundan Arıyorsanız (Telefon Mikrofonunu Açmak İçin):* Telefonunuzun mikrofonuyla canlı konuşmak için şu bağlantıya dokunun:\n` +
             `👉 ${mobileCallUrl}\n\n` +
             `🎙️ *2. Veya Doğrudan Bu WhatsApp Sohbetinden:* Sağ alttaki **🎙️ Sesli Mesaj** tuşuyla konuşarak veya yazarak tüm takvim/ajanda komutlarınızı iletebilirsiniz.\n` +
-            `💻 *3. Bilgisayar (Web WhatsApp) Başındaysanız:* Bilgisayar ekranınızda açılan canlı asistan penceresine doğrudan konuşabilirsiniz.\n\n` +
-            `🛑 *Aramayı & Dinlemeyi Kapatmak İçin:* Sesli veya yazılı olarak *"Sohbeti ve telefonu kapat"*, *"Telefonu kapat"*, *"Dur"* veya *"Stop"* diyebilirsiniz.${BOT_INVISIBLE_MARKER}`;
+            `💻 *3. Bilgisayar (Web WhatsApp) Başındaysanız:* Bilgisayar ekranınızda açılan canlı asistan Donna penceresine doğrudan konuşabilirsiniz.\n\n` +
+            `🛑 *Sohbeti Sonlandırmak İçin:* *"Tamam Donna"*, *"Kapat"*, *"Sonlandır"* veya *"Durdur"* diyebilirsiniz.${BOT_INVISIBLE_MARKER}`;
         const sentCallMsg = await sock.sendMessage(chatJid, {
           text: callMsg,
         });
@@ -1151,6 +1160,9 @@ async function startWhatsAppBot() {
         if (sentCallMsg?.key?.id) {
           sentBotMessageIds.add(sentCallMsg.key.id);
           processedMessageIds.add(sentCallMsg.key.id);
+        }
+        if (isExternalCall) {
+          await sendFemaleVoiceNoteSafely(sock, chatJid, extSpokenGreeting);
         }
       } catch (err) {
         console.error("Çağrı kartı gönderim hatası:", err.message);
