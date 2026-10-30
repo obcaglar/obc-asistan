@@ -5,10 +5,12 @@ import {
   recentWebhookEvents,
   fetchLiveWorkspaceSnapshot,
   activeWhatsAppCall,
+  callTerminatedAt,
   pendingWhatsAppNotifications,
   queueWhatsAppNotification,
   triggerIncomingWhatsAppCall,
   acknowledgeWhatsAppCall,
+  terminateWhatsAppCall,
   resolveGoogleAccessToken,
 } from "@/lib/assistant-engine";
 
@@ -29,6 +31,7 @@ export async function GET(request: NextRequest) {
       ok: true,
       notifications: items,
       activeWhatsAppCall,
+      callTerminatedAt,
     });
   }
 
@@ -63,6 +66,7 @@ export async function GET(request: NextRequest) {
     recentWebhookEvents,
     liveWorkspace,
     activeWhatsAppCall: currentCall,
+    callTerminatedAt,
   });
 }
 
@@ -83,6 +87,17 @@ export async function POST(request: NextRequest) {
     if (body.action === "ack_call") {
       acknowledgeWhatsAppCall(body.callId);
       return NextResponse.json({ ok: true });
+    }
+
+    // 3. Handle remote/voice/button call termination ("end_call") so ALL open tabs/windows stop listening immediately
+    if (body.action === "end_call") {
+      const terminatedTs = terminateWhatsAppCall();
+      if (body.notifyWhatsApp) {
+        queueWhatsAppNotification(
+          `🛑 *Sesli Arama ve Asistan Dinleme Modu Kapatıldı.*\n\n_Görüşme sonlandırıldı Onur Bey._`
+        );
+      }
+      return NextResponse.json({ ok: true, callTerminatedAt: terminatedTs });
     }
 
     const {
@@ -129,13 +144,13 @@ export async function POST(request: NextRequest) {
       credentials,
     });
 
-    // If a real command was executed during a Live Voice Call, also queue its confirmation card for the user's WhatsApp chat!
+    // If a real command or hangup was executed during a Live Voice Call, also queue its confirmation card for the user's WhatsApp chat!
     if (
       fromLiveCall &&
       !fromWhatsAppBot &&
       !result.duplicate &&
       result.replyText &&
-      result.intent !== "help"
+      (result.intent !== "help" || result.endCall)
     ) {
       queueWhatsAppNotification(result.replyText);
     }

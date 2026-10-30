@@ -114,6 +114,80 @@ export interface AssistantProcessResult {
   selectedPhoto?: PhotoItem;
   chainedCount?: number;
   spokenReply?: string;
+  endCall?: boolean;
+  pauseListening?: boolean;
+}
+
+export function isHangupOrStopCommand(rawText?: string): boolean {
+  if (!rawText) return false;
+  const norm = rawText
+    .toLocaleLowerCase("tr-TR")
+    .replace(/ç/g, "c")
+    .replace(/ğ/g, "g")
+    .replace(/ı/g, "i")
+    .replace(/ö/g, "o")
+    .replace(/ş/g, "s")
+    .replace(/ü/g, "u")
+    .replace(/[^a-z0-9\s]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+  if (!norm) return false;
+
+  // 1. Standalone or short direct stop/hangup commands ("stop", "dur", "durdur", "kapat", "sohbeti kapat", "telefonu kapat")
+  if (
+    /^(?:lutfen\s+|simdi\s+|hemen\s+|artik\s+|tamam\s+|tesekkurler\s+|peki\s+)*(?:stop|dur|durdur|kapat|kapatalim|bitir|bitirelim|sonlandir|sus|yeter|bu\s+kadar\s+yeter|hosca\s*kal|gorusuruz|iyi\s+gunler\s+kapat)(?:\s+lutfen|\s+artik|\s+hemen|\s+simdi|\s+asistan|\s+obc|\s+onur\s+bey)*$/.test(
+      norm
+    )
+  ) {
+    return true;
+  }
+
+  // 2. Explicit target + close/stop verb ("sohbeti ve telefonu kapat", "aramayı kapat", "asistanı durdur", "dinlemeyi kapat", "telefonu kapat")
+  if (
+    /\b(?:telefon\w*|sohbet\w*|arama\w*|gorusme\w*|cagri\w*|asistan\w*|dinleme\w*|mikrofon\w*|sesli\s+arama\w*|sesli\s+asistan\w*|konusma\w*)\b.*\b(?:kapat\w*|durdur\w*|dur\b|bitir\w*|sonlandir\w*|kes\w*|stop\b|iptal\s+et\w*)\b/.test(
+      norm
+    ) ||
+    /\b(?:kapat\w*|durdur\w*|dur\b|bitir\w*|sonlandir\w*|kes\w*|stop\b)\b.*\b(?:telefon\w*|sohbet\w*|arama\w*|gorusme\w*|cagri\w*|asistan\w*|dinleme\w*|mikrofon\w*|konusma\w*)\b/.test(
+      norm
+    )
+  ) {
+    return true;
+  }
+
+  // 3. Any utterance <= 12 words containing "stop", "durdur", "telefonu kapat", "sohbeti kapat", "aramayi kapat", "asistani kapat"
+  const words = norm.split(/\s+/);
+  if (
+    words.length <= 12 &&
+    /\b(?:stop|durdur|telefonu\s+kapat|sohbeti\s+kapat|aramayi\s+kapat|gorusmeyi\s+kapat|asistani\s+kapat|dinlemeyi\s+kapat|dinlemeyi\s+durdur|sohbeti\s+ve\s+telefonu\s+kapat)\b/.test(
+      norm
+    )
+  ) {
+    return true;
+  }
+
+  return false;
+}
+
+export function isPauseListeningCommand(rawText?: string): boolean {
+  if (!rawText) return false;
+  const norm = rawText
+    .toLocaleLowerCase("tr-TR")
+    .replace(/ç/g, "c")
+    .replace(/ğ/g, "g")
+    .replace(/ı/g, "i")
+    .replace(/ö/g, "o")
+    .replace(/ş/g, "s")
+    .replace(/ü/g, "u")
+    .replace(/[^a-z0-9\s]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+  if (!norm) return false;
+  return (
+    norm.split(/\s+/).length <= 8 &&
+    /\b(?:dinlemeyi\s+duraklat|mikrofonu\s+duraklat|sessize\s+al|beklemeye\s+al|bir\s+dakika\s+bekle|duraklat)\b/.test(
+      norm
+    )
+  );
 }
 
 export function isBotReplyEcho(rawText?: string): boolean {
@@ -186,7 +260,10 @@ export function isBotReplyEcho(rawText?: string): boolean {
     norm.includes("hangisini paylasmami istersiniz") ||
     norm.includes("numarasini soyleyebilirsiniz") ||
     norm.includes("komutu da sirasiyla yerine getirdim") ||
-    norm.includes("sesinizi cok net duyuyorum")
+    norm.includes("sesinizi cok net duyuyorum") ||
+    norm.includes("sesli aramayi ve dinlemeyi hemen kapatiyorum") ||
+    norm.includes("sesli aramayi hemen kapatiyorum") ||
+    norm.includes("dinlemeyi duraklattim")
   );
 }
 
@@ -219,6 +296,7 @@ export interface PendingWhatsAppNotification {
 }
 
 export let activeWhatsAppCall: ActiveWhatsAppCallState | null = null;
+export let callTerminatedAt = 0;
 export const pendingWhatsAppNotifications: PendingWhatsAppNotification[] = [];
 
 export function queueWhatsAppNotification(text: string, jid?: string) {
@@ -253,6 +331,12 @@ export function acknowledgeWhatsAppCall(callId?: string) {
   if (activeWhatsAppCall && (!callId || activeWhatsAppCall.callId === callId)) {
     activeWhatsAppCall.answeredByWeb = true;
   }
+}
+
+export function terminateWhatsAppCall() {
+  callTerminatedAt = Date.now();
+  activeWhatsAppCall = null;
+  return callTerminatedAt;
 }
 
 let cachedLiveWorkspaceSnapshot: {
@@ -4989,6 +5073,40 @@ async function processAssistantInputCore(params: {
   // Normalize spoken Turkish numbers & dates ("on yedi eylül iki bin yirmi altı" -> "17 Eylül 2026", "beş numarayı paylaş" -> "5 numarayı paylaş")
   transcript = normalizeSpokenTurkishNumbersAndDates(transcript);
 
+  // ==================== 0. INSTANT STOP / HANGUP / PAUSE MODE INTERCEPTION ====================
+  if (isHangupOrStopCommand(transcript)) {
+    terminateWhatsAppCall();
+    return {
+      transcript,
+      intent: "help",
+      action: "delete",
+      endCall: true,
+      usedGemini,
+      syncedToGoogle: false,
+      replyText:
+        `🛑 *Sesli Arama ve Asistan Dinleme Modu Kapatıldı.*\n\n` +
+        `👩‍💼 _"Tamamdır Onur Bey, sesli aramayı ve dinlemeyi hemen kapatıyorum. İyi günler dilerim."_\n\n` +
+        `_Tekrar başlatmak istediğinizde arayabilir veya komut gönderebilirsiniz._`,
+      spokenReply:
+        "Tamamdır Onur Bey, sesli aramayı ve dinlemeyi hemen kapatıyorum. İyi günler dilerim.",
+    };
+  }
+
+  if (isPauseListeningCommand(transcript)) {
+    return {
+      transcript,
+      intent: "help",
+      action: "update",
+      pauseListening: true,
+      usedGemini,
+      syncedToGoogle: false,
+      replyText:
+        `⏸️ *Asistan Dinleme Modu Duraklatıldı (Sessize Alındı).*\n\n` +
+        `👩‍💼 _"Tamamdır Onur Bey, dinlemeyi duraklattım."_`,
+      spokenReply: "Tamamdır Onur Bey, dinlemeyi duraklattım.",
+    };
+  }
+
   // Check for back-to-back sequential commands ("peş peşe komut çalıştırma")
   if (!params._skipChaining) {
     const subCommands = splitIntoSequentialCommands(transcript);
@@ -5040,6 +5158,8 @@ async function processAssistantInputCore(params: {
           selectedDriveFile: subResults.find((r) => r.selectedDriveFile)
             ?.selectedDriveFile,
           selectedPhoto: subResults.find((r) => r.selectedPhoto)?.selectedPhoto,
+          endCall: subResults.some((r) => r.endCall),
+          pauseListening: subResults.some((r) => r.pauseListening),
         };
       }
     }
@@ -5139,19 +5259,25 @@ async function processAssistantInputCore(params: {
   let syncedToGoogle = false;
   let googleSyncError: string | undefined;
 
-  // Guard against background room conversations on open microphone being misclassified as "note", "calendar", or "contact"
+  // Guard against background room conversations on open microphone being misclassified as "note", "calendar", "contact", "drive", or "photos"
+  const hasRoomChatterWords =
+    /\b(yani|abi|abla|hocam|dedik|dedim|dedi|uyuyordur|bakayim|peruk|geliyor\s+ya|onlar\s+da|sey\b|falan|filan|iste\b|hani\b|bence|sanirim|galiba|herhalde|acaba|zaten|cunku|ama\b|fakat|neyse|vallahi|valla|diyorum|diyorsun|konustuk|yapiyoruz|gidiyoruz|baktim|scooter|kurye|superet|implant|anakart|kavurma|makin\w*)\b/.test(
+      normTranscriptForAction
+    );
+
   if (isVoice && parsed.intent === "note") {
-    const hasExplicitNoteKeyword =
-      /\b(not\b|notu\b|notunu|gorev\w*|hatirlat\w*|is\s+olarak|listeye|kaydet\w*|yaz\b|ata\w*)\b/.test(
+    const hasExplicitNoteCommand =
+      /^!not\b/i.test(transcript.trim()) ||
+      /\b(not\s+al\w*|not\s+ekle\w*|not\s+kaydet\w*|notu\s+kaydet\w*|gorev\s+ekle\w*|gorev\s+olustur\w*|is\s+olarak\s+ata\w*|hatirlat\w*|listeye\s+ekle\w*)\b/.test(
         normTranscriptForAction
       );
-    if (!hasExplicitNoteKeyword) {
+    const isTooLongForVoiceNote = transcript.trim().split(/\s+/).length > 22;
+    if (!hasExplicitNoteCommand || isTooLongForVoiceNote || hasRoomChatterWords) {
       parsed.intent = "help";
     }
   }
   if (isVoice && parsed.intent === "calendar") {
-    const hasExplicitCalVerbOrTime =
-      Boolean(localParsed.hasExplicitTime) ||
+    const hasExplicitCalVerb =
       /\b(planla\w*|ayarla\w*|ekle\w*|olustur\w*|ac\b|acmani|acar\s*misin\w*|gir\b|girip\b|girer\s*misin\w*|kaydet\w*|davet\w*|gonder\w*|paylas\w*|sil\w*|iptal\w*|kaldir\w*|guncelle\w*|degistir\w*|ertele\w*|tasi\w*|one\s*cek\w*|ileri\w*\s*al\w*)\b/.test(
         normTranscriptForAction
       );
@@ -5162,11 +5288,17 @@ async function processAssistantInputCore(params: {
     const candidateCalTitle = String(
       parsed.calendar?.title || localParsed.calendar?.title || ""
     ).trim();
+    const normCandidateTitle = normalizeTr(candidateCalTitle);
     const isParagraphChatter =
-      candidateCalTitle.split(/\s+/).length > 10 ||
-      transcript.split(/\s+/).length > 32;
+      candidateCalTitle.split(/\s+/).length > 6 ||
+      candidateCalTitle.length > 48 ||
+      transcript.trim().split(/\s+/).length > 20 ||
+      hasRoomChatterWords ||
+      /\b(yani|abi|dedik|uyuyordur|bakayim|peruk|kadar|geliyor|falan|filan|cunku|ama|zaten)\b/.test(
+        normCandidateTitle
+      );
     if (
-      !hasExplicitCalVerbOrTime ||
+      !hasExplicitCalVerb ||
       (!hasExplicitCalNoun && !localParsed.hasExplicitTime) ||
       isParagraphChatter
     ) {
@@ -5184,10 +5316,22 @@ async function processAssistantInputCore(params: {
     const candidateName = (parsed.contact?.name || localParsed.contact?.name || "").trim();
     const isLongSentenceNotName =
       candidateName.split(/\s+/).length > 5 ||
+      hasRoomChatterWords ||
       /\b(toplanti\w*|takvim\w*|etkinlik\w*|istiyorum|konusacagiz|yapabilir|misin)\b/.test(
         normalizeTr(candidateName)
       );
     if ((!hasExplicitContactKeyword && !hasPhoneDigits) || isLongSentenceNotName) {
+      parsed.intent = "help";
+    }
+  }
+  if (isVoice && (parsed.intent === "drive" || parsed.intent === "photos")) {
+    const hasExplicitMediaVerb =
+      /\b(getir\w*|bul\w*|listele\w*|goster\w*|paylas\w*|gonder\w*|ac\b|acar\s*misin\w*|indir\w*|ara\w*|hangileri|numarayi|numarali|secenek\w*)\b/.test(
+        normTranscriptForAction
+      );
+    const isMediaChatter =
+      transcript.trim().split(/\s+/).length > 22 || hasRoomChatterWords;
+    if (!hasExplicitMediaVerb || isMediaChatter) {
       parsed.intent = "help";
     }
   }
@@ -6054,6 +6198,8 @@ async function processAssistantInputCore(params: {
   }
 
   const isConversationalGreeting =
+    transcript.trim().split(/\s+/).length <= 6 &&
+    !hasRoomChatterWords &&
     /\b(merhaba\w*|selam\w*|alo\w*|efendim|asistan\w*|iyi\s+gunler|gunaydin|iyi\s+aksamlar|nasilsin\w*|duyuyor\s*musun\w*|sesim\s+geliyor\s*mu|orada\s*misin\w*|oradamisin\w*|dinliyor\s*musun\w*|kimsin\w*|yardim\w*|ne\s+yapabilirsin\w*)\b/.test(
       normTranscriptForAction
     );

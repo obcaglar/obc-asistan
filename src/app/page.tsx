@@ -165,6 +165,11 @@ export default function HomePage() {
   const callAudioCtxRef = useRef<AudioContext | null>(null);
   const callPreloadedGreetingUrlRef = useRef<string>("");
   const callExecutingRef = useRef<boolean>(false);
+  const callStartMsRef = useRef<number>(0);
+  const callTabIdRef = useRef<string>(
+    "tab-" + Math.random().toString(36).slice(2, 9)
+  );
+  const callChannelRef = useRef<BroadcastChannel | null>(null);
   const handledCallIdsRef = useRef<Set<string>>(new Set());
   const [callNeedsAudioTap, setCallNeedsAudioTap] = useState(false);
   const [callMicLevel, setCallMicLevel] = useState(0);
@@ -220,6 +225,24 @@ export default function HomePage() {
       .catch(() => {});
 
     // Auto-open WhatsApp Live Voice Call if ?call=1 is present in URL
+    if (typeof window !== "undefined" && "BroadcastChannel" in window) {
+      try {
+        const bc = new BroadcastChannel("obc_voice_call_channel");
+        callChannelRef.current = bc;
+        bc.onmessage = (ev) => {
+          if (
+            ev.data?.type === "NEW_CALL_STARTED" &&
+            ev.data?.tabId !== callTabIdRef.current &&
+            callActiveRef.current
+          ) {
+            endWhatsAppVoiceCall(false);
+          } else if (ev.data?.type === "CALL_ENDED" && callActiveRef.current) {
+            endWhatsAppVoiceCall(false);
+          }
+        };
+      } catch {}
+    }
+
     if (
       typeof window !== "undefined" &&
       window.location.search.includes("call=1")
@@ -276,6 +299,16 @@ export default function HomePage() {
       fetch("/api/assistant")
         .then((r) => r.json())
         .then((data) => {
+          // 0. If the call was terminated remotely (via voice command "kapat/dur/stop", WhatsApp hangup, or another tab), immediately stop listening and close!
+          if (
+            callActiveRef.current &&
+            data?.callTerminatedAt &&
+            data.callTerminatedAt > callStartMsRef.current
+          ) {
+            endWhatsAppVoiceCall(false);
+            return;
+          }
+
           // 1. Check if the user just called +905491007729 on Mobile or Web WhatsApp!
           if (
             data?.activeWhatsAppCall &&
@@ -480,7 +513,9 @@ export default function HomePage() {
         !result.replyText ||
         (params.fromLiveCall &&
           result.intent === "help" &&
-          result.action !== "share")
+          result.action !== "share" &&
+          !result.endCall &&
+          !result.pauseListening)
       ) {
         return result;
       }
@@ -766,6 +801,114 @@ export default function HomePage() {
     }
   }
 
+  function isClientStopOrHangupCommand(rawText?: string): boolean {
+    if (!rawText) return false;
+    const norm = rawText
+      .toLocaleLowerCase("tr-TR")
+      .replace(/ç/g, "c")
+      .replace(/ğ/g, "g")
+      .replace(/ı/g, "i")
+      .replace(/ö/g, "o")
+      .replace(/ş/g, "s")
+      .replace(/ü/g, "u")
+      .replace(/[^a-z0-9\s]/g, " ")
+      .replace(/\s+/g, " ")
+      .trim();
+    if (!norm) return false;
+
+    if (
+      /^(?:lutfen\s+|simdi\s+|hemen\s+|artik\s+|tamam\s+|tesekkurler\s+|peki\s+)*(?:stop|dur|durdur|kapat|kapatalim|bitir|bitirelim|sonlandir|sus|yeter|bu\s+kadar\s+yeter|hosca\s*kal|gorusuruz|iyi\s+gunler\s+kapat)(?:\s+lutfen|\s+artik|\s+hemen|\s+simdi|\s+asistan|\s+obc|\s+onur\s+bey)*$/.test(
+        norm
+      )
+    ) {
+      return true;
+    }
+
+    if (
+      /\b(?:telefon\w*|sohbet\w*|arama\w*|gorusme\w*|cagri\w*|asistan\w*|dinleme\w*|mikrofon\w*|sesli\s+arama\w*|sesli\s+asistan\w*|konusma\w*)\b.*\b(?:kapat\w*|durdur\w*|dur\b|bitir\w*|sonlandir\w*|kes\w*|stop\b|iptal\s+et\w*)\b/.test(
+        norm
+      ) ||
+      /\b(?:kapat\w*|durdur\w*|dur\b|bitir\w*|sonlandir\w*|kes\w*|stop\b)\b.*\b(?:telefon\w*|sohbet\w*|arama\w*|gorusme\w*|cagri\w*|asistan\w*|dinleme\w*|mikrofon\w*|konusma\w*)\b/.test(
+        norm
+      )
+    ) {
+      return true;
+    }
+
+    const words = norm.split(/\s+/);
+    if (
+      words.length <= 12 &&
+      /\b(?:stop|durdur|telefonu\s+kapat|sohbeti\s+kapat|aramayi\s+kapat|gorusmeyi\s+kapat|asistani\s+kapat|dinlemeyi\s+kapat|dinlemeyi\s+durdur|sohbeti\s+ve\s+telefonu\s+kapat)\b/.test(
+        norm
+      )
+    ) {
+      return true;
+    }
+
+    return false;
+  }
+
+  function isClientPauseListeningCommand(rawText?: string): boolean {
+    if (!rawText) return false;
+    const norm = rawText
+      .toLocaleLowerCase("tr-TR")
+      .replace(/ç/g, "c")
+      .replace(/ğ/g, "g")
+      .replace(/ı/g, "i")
+      .replace(/ö/g, "o")
+      .replace(/ş/g, "s")
+      .replace(/ü/g, "u")
+      .replace(/[^a-z0-9\s]/g, " ")
+      .replace(/\s+/g, " ")
+      .trim();
+    if (!norm) return false;
+    return (
+      norm.split(/\s+/).length <= 8 &&
+      /\b(?:dinlemeyi\s+duraklat|mikrofonu\s+duraklat|sessize\s+al|beklemeye\s+al|bir\s+dakika\s+bekle|duraklat)\b/.test(
+        norm
+      )
+    );
+  }
+
+  function triggerVoiceHangupAndClose(spokenText?: string) {
+    callActiveRef.current = false;
+    callExecutingRef.current = false;
+    stopCallRecognitionOnly();
+    if (callMicStreamRef.current) {
+      try {
+        callMicStreamRef.current.getTracks().forEach((t) => t.stop());
+      } catch {}
+      callMicStreamRef.current = null;
+    }
+    if (callTimerRef.current) {
+      clearInterval(callTimerRef.current);
+      callTimerRef.current = null;
+    }
+    setCallLiveTranscript(
+      spokenText
+        ? `🛑 "${spokenText}" — Arama ve Asistan Kapatılıyor...`
+        : "🛑 Sesli Arama ve Asistan Kapatılıyor..."
+    );
+    setCallStatus("paused");
+    showToast("🛑 Sesli arama ve asistan dinleme modu kapatıldı.");
+
+    fetch("/api/assistant", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ action: "end_call", notifyWhatsApp: true }),
+    }).catch(() => {});
+
+    speakTurkishText(
+      "Tamamdır Onur Bey, sesli aramayı ve dinlemeyi hemen kapatıyorum. İyi günler dilerim.",
+      () => {
+        endWhatsAppVoiceCall(false);
+      }
+    );
+    setTimeout(() => {
+      endWhatsAppVoiceCall(false);
+    }, 3200);
+  }
+
   function stopCallRecognitionOnly() {
     if (callSilenceTimeoutRef.current) {
       clearTimeout(callSilenceTimeoutRef.current);
@@ -885,6 +1028,29 @@ export default function HomePage() {
               callTranscriptBufferRef.current = combined;
               setCallLiveTranscript(combined);
               setCallIsRecordingSpeech(true);
+
+              // Instant voice hangup / stop interception ("sohbeti ve telefonu kapat", "stop", "dur", "kapat")
+              if (isClientStopOrHangupCommand(combined)) {
+                if (callSilenceTimeoutRef.current) {
+                  clearTimeout(callSilenceTimeoutRef.current);
+                  callSilenceTimeoutRef.current = null;
+                }
+                triggerVoiceHangupAndClose(combined);
+                return;
+              }
+
+              // Instant pause / mute mode interception ("dinlemeyi duraklat", "sessize al")
+              if (isClientPauseListeningCommand(combined)) {
+                if (callSilenceTimeoutRef.current) {
+                  clearTimeout(callSilenceTimeoutRef.current);
+                  callSilenceTimeoutRef.current = null;
+                }
+                stopCallRecognitionOnly();
+                setCallStatus("paused");
+                showToast("⏸️ Dinleme modu duraklatıldı (Sessize alındı).");
+                speakTurkishText("Tamamdır Onur Bey, dinlemeyi duraklattım.");
+                return;
+              }
 
               if (callHandsFreeRef.current) {
                 if (callSilenceTimeoutRef.current) {
@@ -1039,6 +1205,20 @@ export default function HomePage() {
   ) {
     const command = rawCommandText.trim();
     if ((!command && !audioBase64) || callExecutingRef.current) return;
+
+    // Immediate client-side check for stop/hangup or pause before hitting API
+    if (command && isClientStopOrHangupCommand(command)) {
+      triggerVoiceHangupAndClose(command);
+      return;
+    }
+    if (command && isClientPauseListeningCommand(command)) {
+      stopCallRecognitionOnly();
+      setCallStatus("paused");
+      showToast("⏸️ Dinleme modu duraklatıldı (Sessize alındı).");
+      speakTurkishText("Tamamdır Onur Bey, dinlemeyi duraklattım.");
+      return;
+    }
+
     callExecutingRef.current = true;
 
     stopCallRecognitionOnly();
@@ -1079,6 +1259,27 @@ export default function HomePage() {
     });
 
     const effectiveCommand = result?.transcript || command || "";
+
+    // Check if Gemini STT transcribed a stop/hangup or pause command from audioBase64
+    if (
+      result?.endCall ||
+      (effectiveCommand && isClientStopOrHangupCommand(effectiveCommand))
+    ) {
+      triggerVoiceHangupAndClose(effectiveCommand);
+      return;
+    }
+    if (
+      result?.pauseListening ||
+      (effectiveCommand && isClientPauseListeningCommand(effectiveCommand))
+    ) {
+      callExecutingRef.current = false;
+      stopCallRecognitionOnly();
+      setCallStatus("paused");
+      showToast("⏸️ Dinleme modu duraklatıldı (Sessize alındı).");
+      speakTurkishText("Tamamdır Onur Bey, dinlemeyi duraklattım.");
+      return;
+    }
+
     if (
       !effectiveCommand ||
       result?.duplicate ||
@@ -1151,11 +1352,19 @@ export default function HomePage() {
   }
 
   function startWhatsAppVoiceCall() {
+    callStartMsRef.current = Date.now();
     callActiveRef.current = true;
     callExecutingRef.current = false;
     setIsVoiceCallOpen(true);
     setCallDurationSec(0);
     setCallLiveTranscript("");
+
+    try {
+      callChannelRef.current?.postMessage({
+        type: "NEW_CALL_STARTED",
+        tabId: callTabIdRef.current,
+      });
+    } catch {}
 
     // Synchronously unlock AudioContext & Microphone inside the user click gesture!
     if (typeof window !== "undefined") {
@@ -1190,7 +1399,12 @@ export default function HomePage() {
 
     if (callTimerRef.current) clearInterval(callTimerRef.current);
     callTimerRef.current = setInterval(() => {
-      setCallDurationSec((s) => s + 1);
+      setCallDurationSec((s) => {
+        if (s >= 180 && !callExecutingRef.current) {
+          setTimeout(() => endWhatsAppVoiceCall(true), 0);
+        }
+        return s + 1;
+      });
     }, 1000);
 
     setCallStatus("speaking");
@@ -1204,8 +1418,9 @@ export default function HomePage() {
     );
   }
 
-  function endWhatsAppVoiceCall() {
+  function endWhatsAppVoiceCall(notifyServer = true) {
     callActiveRef.current = false;
+    callExecutingRef.current = false;
     stopCallRecognitionOnly();
     if (callMicStreamRef.current) {
       try {
@@ -1229,10 +1444,30 @@ export default function HomePage() {
         window.speechSynthesis.cancel();
       } catch {}
     }
+    if (notifyServer) {
+      try {
+        callChannelRef.current?.postMessage({ type: "CALL_ENDED" });
+      } catch {}
+      fetch("/api/assistant", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "end_call", notifyWhatsApp: true }),
+      }).catch(() => {});
+    }
     playTone(340, 0.18, "sawtooth");
     setIsVoiceCallOpen(false);
     setCallStatus("paused");
-    showToast("📞 Canlı sesli görüşme sonlandırıldı.");
+    showToast("🛑 Canlı sesli görüşme ve mikrofon dinlemesi kapatıldı.");
+    if (
+      typeof window !== "undefined" &&
+      window.location.search.includes("call=1")
+    ) {
+      setTimeout(() => {
+        try {
+          window.close();
+        } catch {}
+      }, 250);
+    }
   }
 
   useEffect(() => {
@@ -3545,6 +3780,36 @@ WHATSAPP_VERIFY_TOKEN=${waverify}`;
                 )}
               </div>
 
+              {/* Voice Hangup / Stop / Pause Mode Banner */}
+              <div className="w-full bg-red-950/45 border border-red-500/40 rounded-2xl px-3.5 py-2.5 flex flex-col sm:flex-row items-center justify-between gap-2 text-xs">
+                <div className="text-red-200 text-left">
+                  <span className="font-extrabold text-red-300">
+                    🛑 Sesli Kapatma &amp; Durdurma Komutları:{" "}
+                  </span>
+                  <span>
+                    &quot;Sohbeti ve telefonu kapat&quot;, &quot;Sohbeti kapat&quot;, &quot;Telefonu kapat&quot;, &quot;Asistanı kapat&quot;, &quot;Dur&quot;, &quot;Stop&quot;
+                  </span>
+                </div>
+                <div className="flex items-center gap-2 shrink-0">
+                  <button
+                    onClick={() => {
+                      stopCallRecognitionOnly();
+                      setCallStatus("paused");
+                      showToast("⏸️ Dinleme modu duraklatıldı (Sessize alındı).");
+                    }}
+                    className="px-3 py-1.5 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 font-extrabold text-[11px] cursor-pointer"
+                  >
+                    ⏸️ Duraklat
+                  </button>
+                  <button
+                    onClick={() => triggerVoiceHangupAndClose("Sohbeti ve telefonu kapat")}
+                    className="px-3.5 py-1.5 rounded-xl bg-red-600 hover:bg-red-500 text-white font-extrabold text-[11px] shadow cursor-pointer"
+                  >
+                    🛑 Hemen Kapat (STOP)
+                  </button>
+                </div>
+              </div>
+
               {/* Quick Voice Chain Buttons inside Call */}
               <div className="w-full flex flex-wrap justify-center gap-2">
                 <button
@@ -3702,11 +3967,11 @@ WHATSAPP_VERIFY_TOKEN=${waverify}`;
               </button>
 
               <button
-                onClick={endWhatsAppVoiceCall}
+                onClick={() => endWhatsAppVoiceCall(true)}
                 className="px-6 py-3 rounded-2xl bg-red-600 hover:bg-red-500 text-white text-xs sm:text-sm font-extrabold flex items-center gap-2 shadow-xl shadow-red-950/60 transition cursor-pointer"
               >
                 <i className="fa-solid fa-phone-slash"></i>
-                <span>Aramayı Bitir</span>
+                <span>🛑 Sohbeti &amp; Telefonu Kapat (STOP)</span>
               </button>
             </div>
           </div>

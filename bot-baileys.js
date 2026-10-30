@@ -522,6 +522,10 @@ async function startWhatsAppBot() {
         trimmedText.startsWith("✅ *Seçilen") ||
         trimmedText.startsWith("⚡ *Peş Peşe") ||
         trimmedText.startsWith("📞 *Canlı Sesli Arama") ||
+        trimmedText.startsWith("📞 *Çağrınız Yanıtlandı") ||
+        trimmedText.startsWith("🛑 *Sesli Arama") ||
+        trimmedText.startsWith("⏸️ *Asistan Dinleme") ||
+        trimmedText.startsWith("👩‍💼 *Canlı Sesli Asistan") ||
         trimmedText.startsWith("📝 Mesajınız işlendi") ||
         trimmedText.startsWith("Anlayamadım. Lütfen") ||
         trimmedText.includes("📌 *Başlık:*") ||
@@ -598,7 +602,16 @@ async function startWhatsAppBot() {
         lower.includes("numara") ||
         lower.includes("numaralı") ||
         lower.includes("ardından") ||
-        lower.includes("daha sonra");
+        lower.includes("daha sonra") ||
+        lower.includes("kapat") ||
+        lower.includes("durdur") ||
+        lower.includes("dur") ||
+        lower.includes("stop") ||
+        lower.includes("bitir") ||
+        lower.includes("sonlandır") ||
+        lower.includes("sonlandir") ||
+        lower.includes("sessize al") ||
+        lower.includes("duraklat");
 
       if (!isCommand) continue;
 
@@ -887,6 +900,11 @@ async function startWhatsAppBot() {
         }
 
         console.log("✅ Tekil yanıt WhatsApp üzerinden gönderildi!");
+        if (result?.endCall && process.platform === "win32" && !process.env.RENDER) {
+          exec(
+            `powershell -NoProfile -Command "Get-CimInstance Win32_Process -Filter \\"Name = 'chrome.exe'\\" | Where-Object { $_.CommandLine -like '*chrome_call_profile*' } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force }"`
+          );
+        }
       } catch (err) {
         console.error("Asistan hatası:", err.message);
       } finally {
@@ -896,12 +914,21 @@ async function startWhatsAppBot() {
   });
 
   // Listen to incoming WhatsApp Voice/Video Calls:
-  // 1. Signal Local & Cloud web apps immediately and open the Foreground Live Female Voice Assistant window
-  // 2. End the WhatsApp ringing tone after 1.8s (one ring) so the ringing sound stops right as the female assistant begins speaking
-  // 3. Send a 1-tap Live Call Card (text only with BOT_INVISIBLE_MARKER, never audio files) so Mobile WhatsApp users can also tap or see live results in chat
+  // 1. Signal Local & Cloud web apps immediately and open a SINGLE Foreground Live Female Voice Assistant window
+  // 2. End the WhatsApp ringing tone after 1.2s so Web WhatsApp and Mobile WhatsApp stop ringing right as the female assistant begins speaking
+  // 3. Send a 1-tap Live Call Card (text only with BOT_INVISIBLE_MARKER, never audio files) including Stop/Hangup instructions
   const processedCallIds = new Set();
   let lastDesktopBrowserOpenMs = 0;
+  let lastHandledTerminationMs = Date.now();
   let lastCallerJid = `${TARGET_ASSISTANT_PHONE}@s.whatsapp.net`;
+
+  function closeDesktopCallWindow() {
+    if (process.platform === "win32" && !process.env.RENDER) {
+      exec(
+        `powershell -NoProfile -Command "Get-CimInstance Win32_Process -Filter \\"Name = 'chrome.exe'\\" | Where-Object { $_.CommandLine -like '*chrome_call_profile*' } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force }"`
+      );
+    }
+  }
 
   // Forward any command executed during the Live Voice Call UI straight into the caller's WhatsApp chat!
   const notifTimer = setInterval(async () => {
@@ -914,12 +941,19 @@ async function startWhatsAppBot() {
         `${ASSISTANT_API_URL}?consume_notifications=1`,
         { timeout: 2000 }
       );
+      if (
+        nRes.data?.callTerminatedAt &&
+        nRes.data.callTerminatedAt > lastHandledTerminationMs
+      ) {
+        lastHandledTerminationMs = nRes.data.callTerminatedAt;
+        setTimeout(() => closeDesktopCallWindow(), 2600);
+      }
       const items = Array.isArray(nRes.data?.notifications)
         ? nRes.data.notifications
         : [];
       for (const item of items) {
         if (!item?.text) continue;
-        let targetJid = item.jid || lastCallerJid;
+        let targetJid = (item.jid || lastCallerJid || "").replace(/:\d+@/, "@");
         if (!targetJid.includes("@")) {
           targetJid = `${targetJid.replace(/\D/g, "")}@s.whatsapp.net`;
         }
@@ -937,25 +971,26 @@ async function startWhatsAppBot() {
   sock.ev.on("call", async (calls) => {
     for (const call of calls) {
       if (call.status !== "offer") continue;
-      const callerJid = call.from || call.chatId;
-      if (!callerJid) continue;
+      const rawCallerJid = call.from || call.chatId;
+      if (!rawCallerJid) continue;
+      const chatJid = rawCallerJid.replace(/:\d+@/, "@");
 
       if (call.id && processedCallIds.has(call.id)) continue;
       if (call.id) processedCallIds.add(call.id);
 
       const now = Date.now();
-      lastCallerJid = callerJid;
-      activeVoiceCallJids.set(callerJid, now);
+      lastCallerJid = chatJid;
+      activeVoiceCallJids.set(chatJid, now);
 
       console.log(
-        `📞 WhatsApp Sesli Arama Algılandı (${callerJid}, callId=${call.id}) -> Canlı Kadın Sesli Asistan Penceresi Açılıyor!`
+        `📞 WhatsApp Sesli Arama Algılandı (${rawCallerJid} -> ${chatJid}, callId=${call.id}) -> Canlı Kadın Sesli Asistan Penceresi Açılıyor!`
       );
 
       // 1. Signal Local AND Cloud web apps immediately so any active mobile/desktop screen activates the Live Voice Call UI!
       axios
         .post(
           ASSISTANT_API_URL,
-          { action: "incoming_call", callId: call.id, callerJid },
+          { action: "incoming_call", callId: call.id, callerJid: chatJid },
           { timeout: 4000 }
         )
         .catch(() => {});
@@ -963,13 +998,13 @@ async function startWhatsAppBot() {
         axios
           .post(
             VERCEL_API_URL,
-            { action: "incoming_call", callId: call.id, callerJid },
+            { action: "incoming_call", callId: call.id, callerJid: chatJid },
             { timeout: 4000 }
           )
           .catch(() => {});
       }
 
-      // 2. On Windows desktop, IMMEDIATELY launch & bring to foreground the dedicated Chrome Call Window on top of Web WhatsApp!
+      // 2. On Windows desktop, close any previous call popup first so duplicate windows NEVER stack up, then open the single Call Window!
       if (
         process.platform === "win32" &&
         !process.env.RENDER &&
@@ -983,39 +1018,43 @@ async function startWhatsAppBot() {
           const callUrl = "http://localhost:3000/?call=1&autostart=1";
           if (fs.existsSync(chromeExe)) {
             exec(
-              `"${chromeExe}" --user-data-dir="${callProfileDir}" --autoplay-policy=no-user-gesture-required --use-fake-ui-for-media-stream --window-size=540,840 --app="${callUrl}"`
+              `powershell -NoProfile -Command "Get-CimInstance Win32_Process -Filter \\"Name = 'chrome.exe'\\" | Where-Object { $_.CommandLine -like '*chrome_call_profile*' } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force }; Start-Process -FilePath '${chromeExe}' -ArgumentList '--user-data-dir=\\"${callProfileDir}\\"','--autoplay-policy=no-user-gesture-required','--use-fake-ui-for-media-stream','--window-size=540,840','--app=${callUrl}'"`
             );
             setTimeout(() => {
               exec(
                 `powershell -NoProfile -Command "(New-Object -ComObject WScript.Shell).AppActivate('OBC')"`
               );
-            }, 900);
+            }, 1100);
           } else {
             exec(`start "" "${callUrl}"`);
           }
         } catch {}
       }
 
-      // 3. Stop the WhatsApp ringing sound after 1.8s (1 ring) so Web WhatsApp and Cep WhatsApp stop ringing right as the female assistant speaks!
+      // 3. Stop the WhatsApp ringing sound after 1.2s (both raw device JID and chat JID) so Web WhatsApp and Mobile WhatsApp stop ringing right as the female assistant speaks!
       setTimeout(async () => {
         try {
           if (typeof sock.rejectCall === "function") {
-            await sock.rejectCall(call.id, call.from);
+            await sock.rejectCall(call.id, rawCallerJid);
+            if (chatJid !== rawCallerJid) {
+              await sock.rejectCall(call.id, chatJid).catch(() => {});
+            }
           }
         } catch {}
-      }, 1800);
+      }, 1200);
 
-      // 4. Send a 1-tap Live Call Card (text only with BOT_INVISIBLE_MARKER, never audio files) so Mobile & Web WhatsApp users see the call is active
+      // 4. Send a 1-tap Live Call Card (text only with BOT_INVISIBLE_MARKER, never audio files) so Mobile & Web WhatsApp users see the call is active and know the stop commands
       try {
         const callMsg =
           `📞 *Çağrınız Yanıtlandı — Sizi Dinliyorum Onur Bey!*\n\n` +
           `👩‍💼 _"Buyurun Onur Bey, çağrınızı aldım, sizi dinliyorum. Ne yapmamı istersiniz?"_\n\n` +
           `🎙️ *Canlı Kadın Sesli Asistanınız mikrofonu açık olarak başlatıldı.* Doğrudan konuşabilir veya cep telefonunuzdan canlı görüşme ekranını açmak için dokunabilirsiniz:\n` +
-          `👉 https://obc-asistan.vercel.app/?call=1&autostart=1${BOT_INVISIBLE_MARKER}`;
-        const sentCallMsg = await sock.sendMessage(callerJid, {
+          `👉 https://obc-asistan.vercel.app/?call=1&autostart=1\n\n` +
+          `🛑 *Aramayı & Dinlemeyi Kapatmak İçin:* Sesli veya yazılı olarak *"Sohbeti ve telefonu kapat"*, *"Telefonu kapat"*, *"Dur"* veya *"Stop"* diyebilirsiniz.${BOT_INVISIBLE_MARKER}`;
+        const sentCallMsg = await sock.sendMessage(chatJid, {
           text: callMsg,
         });
-        lastBotReplyTimePerJid.set(callerJid, Date.now());
+        lastBotReplyTimePerJid.set(chatJid, Date.now());
         if (sentCallMsg?.key?.id) {
           sentBotMessageIds.add(sentCallMsg.key.id);
           processedMessageIds.add(sentCallMsg.key.id);
