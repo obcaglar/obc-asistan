@@ -524,9 +524,12 @@ async function startWhatsAppBot() {
         trimmedText.startsWith("⚡ *Peş Peşe") ||
         trimmedText.startsWith("📞 *Canlı Sesli Arama") ||
         trimmedText.startsWith("📞 *Çağrınız Yanıtlandı") ||
+        trimmedText.startsWith("📞 *Donna") ||
         trimmedText.startsWith("🛑 *Sesli Arama") ||
-        trimmedText.startsWith("⏸️ *Asistan Dinleme") ||
+        trimmedText.startsWith("🛑 *İletişim Sonlandırıldı") ||
+        trimmedText.startsWith("⏸️ *Asistan") ||
         trimmedText.startsWith("👩‍💼 *Canlı Sesli Asistan") ||
+        trimmedText.startsWith("👩‍💼 *Donna") ||
         trimmedText.startsWith("📝 Mesajınız işlendi") ||
         trimmedText.startsWith("Anlayamadım. Lütfen") ||
         trimmedText.includes("📌 *Başlık:*") ||
@@ -1054,8 +1057,17 @@ async function startWhatsAppBot() {
 
       const callerPhone = chatJid.replace(/@.*$/, "");
       const knownCaller = callerProfileByJid.get(chatJid);
+      const ownJid = sock.user?.id
+        ? sock.user.id.replace(/:\d+@/, "@")
+        : `${TARGET_ASSISTANT_PHONE}@s.whatsapp.net`;
+      const ownLid = sock.user?.lid
+        ? sock.user.lid.replace(/:\d+@/, "@")
+        : "";
       const isExternalCall = Boolean(
-        ownJid && chatJid !== ownJid && (!ownLid || chatJid !== ownLid)
+        ownJid &&
+          chatJid !== ownJid &&
+          !chatJid.startsWith(TARGET_ASSISTANT_PHONE) &&
+          (!ownLid || chatJid !== ownLid)
       );
       const callerDisplay =
         knownCaller?.senderName || (isExternalCall ? `+${callerPhone}` : "Onur Bey");
