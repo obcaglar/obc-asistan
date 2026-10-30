@@ -328,6 +328,7 @@ const lastCommandTimePerJid = new Map();
 const lastBotReplyTimePerJid = new Map();
 const botSendingVoiceUntil = new Map();
 const activeVoiceCallJids = new Map();
+const callerProfileByJid = new Map();
 const BOT_INVISIBLE_MARKER = "\u200B";
 
 async function generateTurkishFemaleVoiceBuffer(rawText) {
@@ -537,11 +538,30 @@ async function startWhatsAppBot() {
         continue;
       }
 
+      const senderName = String(m.pushName || m.verifiedBizName || "").trim();
+      const altJid = String(
+        m.key?.remoteJidAlt || m.key?.participantAlt || m.key?.participant || ""
+      );
+      const senderPhone = jid.endsWith("@s.whatsapp.net")
+        ? jid.split("@")[0]
+        : altJid.endsWith("@s.whatsapp.net")
+          ? altJid.split("@")[0]
+          : "";
+      if (senderName || senderPhone) {
+        const prevProf = callerProfileByJid.get(jid) || {};
+        callerProfileByJid.set(jid, {
+          senderName: senderName || prevProf.senderName || "",
+          senderPhone: senderPhone || prevProf.senderPhone || "",
+        });
+      }
+
       const audioMsg = innerMsg.audioMessage || m.message.audioMessage;
       const lower = trimmedText.toLocaleLowerCase("tr-TR");
       const hasClockTime = /\b([01]?\d|2[0-3])[:.][0-5]\d\b/.test(lower);
+      const isExternalCaller = !m.key?.fromMe;
       const isCommand =
         Boolean(audioMsg) ||
+        (isExternalCaller && trimmedText.length >= 2) ||
         lower.startsWith("!") ||
         hasClockTime ||
         lower.includes("toplantı") ||
@@ -560,6 +580,10 @@ async function startWhatsAppBot() {
         lower.includes("numara") ||
         lower.includes("kaydet") ||
         lower.includes("ekle") ||
+        lower.includes("oluştur") ||
+        lower.includes("olustur") ||
+        lower.includes("planla") ||
+        lower.includes("ayarla") ||
         lower.includes("girer misin") ||
         lower.includes("gönder") ||
         lower.includes("gonder") ||
@@ -579,8 +603,26 @@ async function startWhatsAppBot() {
         lower.includes("iptal") ||
         lower.includes("kaldır") ||
         lower.includes("hatırlat") ||
-        lower.includes("not al") ||
-        lower.includes("not et") ||
+        lower.includes("hatirlat") ||
+        lower.includes("not") ||
+        lower.includes("yaz") ||
+        lower.includes("bırak") ||
+        lower.includes("birak") ||
+        lower.includes("yarın") ||
+        lower.includes("yarin") ||
+        lower.includes("bugün") ||
+        lower.includes("bugun") ||
+        lower.includes("saat") ||
+        lower.includes("pazartesi") ||
+        lower.includes("salı") ||
+        lower.includes("sali") ||
+        lower.includes("çarşamba") ||
+        lower.includes("carsamba") ||
+        lower.includes("perşembe") ||
+        lower.includes("persembe") ||
+        lower.includes("cuma") ||
+        lower.includes("cumartesi") ||
+        lower.includes("pazar") ||
         lower.includes("iş olarak") ||
         lower.includes("is olarak") ||
         lower.includes("foto") ||
@@ -724,8 +766,12 @@ async function startWhatsAppBot() {
         }
         recentCommandSignatures.set(cmdSig, nowMs);
 
+        const knownProf = callerProfileByJid.get(jid) || {};
+        const effectiveSenderName = senderName || knownProf.senderName || "";
+        const effectiveSenderPhone = senderPhone || knownProf.senderPhone || "";
+
         console.log(
-          `📩 Komut işleniyor (${jid}):`,
+          `📩 Komut işleniyor (${jid}${effectiveSenderName ? ` - ${effectiveSenderName}` : ""}):`,
           trimmedText || `[Sesli Mesaj - ${mimeType}]`
         );
         require("dotenv").config({ path: ".env.local", override: true });
@@ -745,6 +791,9 @@ async function startWhatsAppBot() {
               mimeType,
               isVoice,
               fromWhatsAppBot: true,
+              senderName: effectiveSenderName || undefined,
+              senderPhone: effectiveSenderPhone || undefined,
+              isExternalCaller,
               credentials: envCredentials,
             },
             { timeout: 22000 }
@@ -761,6 +810,9 @@ async function startWhatsAppBot() {
                 mimeType,
                 isVoice,
                 fromWhatsAppBot: true,
+                senderName: effectiveSenderName || undefined,
+                senderPhone: effectiveSenderPhone || undefined,
+                isExternalCaller,
                 credentials: envCredentials,
               },
               { timeout: 22000 }
@@ -793,6 +845,16 @@ async function startWhatsAppBot() {
         if (sentMsg?.key?.id) {
           sentBotMessageIds.add(sentMsg.key.id);
           processedMessageIds.add(sentMsg.key.id);
+        }
+
+        // If the user sent a voice note OR recently placed a WhatsApp call on mobile, also reply with a Female Voice confirmation!
+        const recentCallTs = activeVoiceCallJids.get(jid) || 0;
+        if (
+          result.spokenReply &&
+          !result.endCall &&
+          (isVoice || Date.now() - recentCallTs < 10 * 60 * 1000)
+        ) {
+          await sendFemaleVoiceNoteSafely(sock, jid, result.spokenReply);
         }
 
         // If Google Photos / Drive images were returned, also send up to 3 actual photos directly to WhatsApp
@@ -982,15 +1044,31 @@ async function startWhatsAppBot() {
       lastCallerJid = chatJid;
       activeVoiceCallJids.set(chatJid, now);
 
+      const callerPhone = chatJid.replace(/@.*$/, "");
+      const knownCaller = callerProfileByJid.get(chatJid);
+      const isExternalCall = Boolean(
+        ownJid && chatJid !== ownJid && (!ownLid || chatJid !== ownLid)
+      );
+      const callerDisplay =
+        knownCaller?.senderName || (isExternalCall ? `+${callerPhone}` : "Onur Bey");
+      const callerQuery = isExternalCall
+        ? `&caller=${encodeURIComponent(knownCaller?.senderName || callerPhone)}`
+        : "";
+
       console.log(
-        `📞 WhatsApp Sesli Arama Algılandı (${rawCallerJid} -> ${chatJid}, callId=${call.id}) -> Canlı Kadın Sesli Asistan Penceresi Açılıyor!`
+        `📞 WhatsApp Sesli Arama Algılandı (${rawCallerJid} -> ${chatJid}, arayan=${callerDisplay}, callId=${call.id}) -> Canlı Kadın Sesli Asistan Açılıyor!`
       );
 
       // 1. Signal Local AND Cloud web apps immediately so any active mobile/desktop screen activates the Live Voice Call UI!
       axios
         .post(
           ASSISTANT_API_URL,
-          { action: "incoming_call", callId: call.id, callerJid: chatJid },
+          {
+            action: "incoming_call",
+            callId: call.id,
+            callerJid: chatJid,
+            callerName: knownCaller?.senderName || callerPhone,
+          },
           { timeout: 4000 }
         )
         .catch(() => {});
@@ -998,7 +1076,12 @@ async function startWhatsAppBot() {
         axios
           .post(
             VERCEL_API_URL,
-            { action: "incoming_call", callId: call.id, callerJid: chatJid },
+            {
+              action: "incoming_call",
+              callId: call.id,
+              callerJid: chatJid,
+              callerName: knownCaller?.senderName || callerPhone,
+            },
             { timeout: 4000 }
           )
           .catch(() => {});
@@ -1015,7 +1098,7 @@ async function startWhatsAppBot() {
           const chromeExe =
             "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe";
           const callProfileDir = path.join(__dirname, ".chrome_call_profile");
-          const callUrl = "http://localhost:3000/?call=1&autostart=1";
+          const callUrl = `http://localhost:3000/?call=1&autostart=1${callerQuery}`;
           if (fs.existsSync(chromeExe)) {
             exec(
               `powershell -NoProfile -Command "Get-CimInstance Win32_Process -Filter \\"Name = 'chrome.exe'\\" | Where-Object { $_.CommandLine -like '*chrome_call_profile*' } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force }; Start-Process -FilePath '${chromeExe}' -ArgumentList '--user-data-dir=\\"${callProfileDir}\\"','--autoplay-policy=no-user-gesture-required','--use-fake-ui-for-media-stream','--window-size=540,840','--app=${callUrl}'"`
@@ -1043,14 +1126,24 @@ async function startWhatsAppBot() {
         } catch {}
       }, 1200);
 
-      // 4. Send a 1-tap Live Call Card (text only with BOT_INVISIBLE_MARKER, never audio files) so Mobile & Web WhatsApp users see the call is active and know the stop commands
+      // 4. Send a 1-tap Live Call Card (text only with BOT_INVISIBLE_MARKER, never audio files) so Mobile & Web WhatsApp users see how to use their phone's microphone or WhatsApp voice notes
       try {
-        const callMsg =
-          `📞 *Çağrınız Yanıtlandı — Sizi Dinliyorum Onur Bey!*\n\n` +
-          `👩‍💼 _"Buyurun Onur Bey, çağrınızı aldım, sizi dinliyorum. Ne yapmamı istersiniz?"_\n\n` +
-          `🎙️ *Canlı Kadın Sesli Asistanınız mikrofonu açık olarak başlatıldı.* Doğrudan konuşabilir veya cep telefonunuzdan canlı görüşme ekranını açmak için dokunabilirsiniz:\n` +
-          `👉 https://obc-asistan.vercel.app/?call=1&autostart=1\n\n` +
-          `🛑 *Aramayı & Dinlemeyi Kapatmak İçin:* Sesli veya yazılı olarak *"Sohbeti ve telefonu kapat"*, *"Telefonu kapat"*, *"Dur"* veya *"Stop"* diyebilirsiniz.${BOT_INVISIBLE_MARKER}`;
+        const mobileCallUrl = `https://obc-asistan.vercel.app/?call=1&autostart=1${callerQuery}`;
+        const callMsg = isExternalCall
+          ? `📞 *OBC Asistan — Çağrınız Alındı (${callerDisplay})*\n\n` +
+            `👩‍💼 _"Merhaba, ben Dr. Onur Baran Çağlar'ın yapay zeka asistanıyım. Onur Bey'in ajandasına ve takvimine not veya etkinlik eklemek için sizi dinliyorum."_\n\n` +
+            `📱 *1. Cep Telefonunuzun Mikrofonuyla Canlı Konuşmak İçin:* Aşağıdaki bağlantıya dokunarak telefonunuzda canlı sesli asistan ekranını açın:\n` +
+            `👉 ${mobileCallUrl}\n\n` +
+            `🎙️ *2. Veya Doğrudan Bu WhatsApp Sohbetinden:* Bağlantıya tıklamadan bu sohbette **🎙️ Sesli Mesaj (Mikrofon)** tuşuna basıp konuşarak ya da yazarak Onur Bey'in ajandasına doğrudan not/randevu ekleyebilirsiniz.\n` +
+            `_(Örn: "Onur Bey'in ajandasına yarın saat 15:00 için proje toplantısı notu ekle")_\n\n` +
+            `🛑 *Kapatmak İçin:* *"Telefonu kapat"*, *"Dur"* veya *"Stop"* diyebilirsiniz.${BOT_INVISIBLE_MARKER}`
+          : `📞 *Çağrınız Yanıtlandı — Sizi Dinliyorum Onur Bey!*\n\n` +
+            `👩‍💼 _"Buyurun Onur Bey, çağrınızı aldım, sizi dinliyorum. Ne yapmamı istersiniz?"_\n\n` +
+            `📱 *1. Cep Telefonundan Arıyorsanız (Telefon Mikrofonunu Açmak İçin):* Telefonunuzun mikrofonuyla canlı konuşmak için şu bağlantıya dokunun:\n` +
+            `👉 ${mobileCallUrl}\n\n` +
+            `🎙️ *2. Veya Doğrudan Bu WhatsApp Sohbetinden:* Sağ alttaki **🎙️ Sesli Mesaj** tuşuyla konuşarak veya yazarak tüm takvim/ajanda komutlarınızı iletebilirsiniz.\n` +
+            `💻 *3. Bilgisayar (Web WhatsApp) Başındaysanız:* Bilgisayar ekranınızda açılan canlı asistan penceresine doğrudan konuşabilirsiniz.\n\n` +
+            `🛑 *Aramayı & Dinlemeyi Kapatmak İçin:* Sesli veya yazılı olarak *"Sohbeti ve telefonu kapat"*, *"Telefonu kapat"*, *"Dur"* veya *"Stop"* diyebilirsiniz.${BOT_INVISIBLE_MARKER}`;
         const sentCallMsg = await sock.sendMessage(chatJid, {
           text: callMsg,
         });

@@ -166,9 +166,8 @@ export default function HomePage() {
   const callPreloadedGreetingUrlRef = useRef<string>("");
   const callExecutingRef = useRef<boolean>(false);
   const callStartMsRef = useRef<number>(0);
-  const callTabIdRef = useRef<string>(
-    "tab-" + Math.random().toString(36).slice(2, 9)
-  );
+  const callTabIdRef = useRef<string>("");
+  const callCallerNameRef = useRef<string>("");
   const callChannelRef = useRef<BroadcastChannel | null>(null);
   const handledCallIdsRef = useRef<Set<string>>(new Set());
   const [callNeedsAudioTap, setCallNeedsAudioTap] = useState(false);
@@ -223,6 +222,19 @@ export default function HomePage() {
         }
       })
       .catch(() => {});
+
+    if (!callTabIdRef.current) {
+      callTabIdRef.current = "tab-" + Math.random().toString(36).slice(2, 9);
+    }
+    if (typeof window !== "undefined") {
+      try {
+        const sp = new URLSearchParams(window.location.search);
+        const callerParam = sp.get("caller");
+        if (callerParam) {
+          callCallerNameRef.current = callerParam.trim();
+        }
+      } catch {}
+    }
 
     // Auto-open WhatsApp Live Voice Call if ?call=1 is present in URL
     if (typeof window !== "undefined" && "BroadcastChannel" in window) {
@@ -495,6 +507,7 @@ export default function HomePage() {
           mimeType: params.mimeType,
           isVoice: params.isVoice,
           fromLiveCall: params.fromLiveCall,
+          senderName: callCallerNameRef.current || undefined,
           credentials: {
             geminiApiKey: wizGemini || undefined,
             googleClientId: wizGClient || undefined,
@@ -633,6 +646,9 @@ export default function HomePage() {
         };
       } else if (result.intent === "note" && result.note) {
         setNotesList((prev) => [result.note!, ...prev]);
+        if (result.calendarEvent) {
+          setCalendarEvents((prev) => [result.calendarEvent!, ...prev]);
+        }
         meta = {
           type: "note",
           id: result.note.id,
@@ -641,7 +657,7 @@ export default function HomePage() {
         };
         showToast(
           result.syncedToGoogle
-            ? "📋 Görev & İş Ataması Google Tasks ve Takvim'e kaydedildi!"
+            ? "📋 Görev & Ajanda Notu Google Takvim ve Tasks'a kaydedildi!"
             : "📝 Not başarıyla kaydedildi!"
         );
       } else if (result.intent === "photos") {
@@ -817,7 +833,13 @@ export default function HomePage() {
     if (!norm) return false;
 
     if (
-      /^(?:lutfen\s+|simdi\s+|hemen\s+|artik\s+|tamam\s+|tesekkurler\s+|peki\s+)*(?:stop|dur|durdur|kapat|kapatalim|bitir|bitirelim|sonlandir|sus|yeter|bu\s+kadar\s+yeter|hosca\s*kal|gorusuruz|iyi\s+gunler\s+kapat)(?:\s+lutfen|\s+artik|\s+hemen|\s+simdi|\s+asistan|\s+obc|\s+onur\s+bey)*$/.test(
+      /\b(?:diyebilirsiniz|kapatmak\s+icin|durdurmak\s+icin)\b/.test(norm)
+    ) {
+      return false;
+    }
+
+    if (
+      /\b(?:sohbeti\s+ve\s+telefonu\s+kapat\w*|telefonu\s+ve\s+sohbeti\s+kapat\w*|telefonu\s+kapat\w*|sohbeti\s+kapat\w*|aramayi\s+kapat\w*|aramayi\s+sonlandir\w*|cagriyi\s+kapat\w*|cagriyi\s+sonlandir\w*|asistani\s+kapat\w*|asistani\s+durdur\w*|dinlemeyi\s+kapat\w*|dinlemeyi\s+durdur\w*|sesli\s+aramayi\s+kapat\w*)\b/.test(
         norm
       )
     ) {
@@ -825,10 +847,15 @@ export default function HomePage() {
     }
 
     if (
-      /\b(?:telefon\w*|sohbet\w*|arama\w*|gorusme\w*|cagri\w*|asistan\w*|dinleme\w*|mikrofon\w*|sesli\s+arama\w*|sesli\s+asistan\w*|konusma\w*)\b.*\b(?:kapat\w*|durdur\w*|dur\b|bitir\w*|sonlandir\w*|kes\w*|stop\b|iptal\s+et\w*)\b/.test(
+      /\b(?:toplanti\w*|etkinlik\w*|etkinlig\w*|takvim\w*|ajanda\w*|randevu\w*|not\b|notu\b|notunu\b|gorev\w*|hatirlat\w*|ekle\w*|olustur\w*|planla\w*|ayarla\w*|kaydet\w*|rehber\w*|dosya\w*|belge\w*|fotograf\w*|resim\w*|paylas\w*|gonder\w*|saat\b|yarin\b|bugun\b)\b/.test(
         norm
-      ) ||
-      /\b(?:kapat\w*|durdur\w*|dur\b|bitir\w*|sonlandir\w*|kes\w*|stop\b)\b.*\b(?:telefon\w*|sohbet\w*|arama\w*|gorusme\w*|cagri\w*|asistan\w*|dinleme\w*|mikrofon\w*|konusma\w*)\b/.test(
+      )
+    ) {
+      return false;
+    }
+
+    if (
+      /^(?:lutfen\s+|simdi\s+|hemen\s+|artik\s+|tamam\s+|tesekkurler\s+|peki\s+|asistan\s+|obc\s+|onur\s+bey\s+)*(?:stop|dur|durdur|kapat|kapatalim|bitir|bitirelim|sonlandir|sus|yeter|bu\s+kadar\s+yeter|hosca\s*kal|gorusuruz|iyi\s+gunler\s+kapat)(?:\s+lutfen|\s+artik|\s+hemen|\s+simdi|\s+asistan|\s+obc|\s+onur\s+bey)*$/.test(
         norm
       )
     ) {
@@ -837,10 +864,13 @@ export default function HomePage() {
 
     const words = norm.split(/\s+/);
     if (
-      words.length <= 12 &&
-      /\b(?:stop|durdur|telefonu\s+kapat|sohbeti\s+kapat|aramayi\s+kapat|gorusmeyi\s+kapat|asistani\s+kapat|dinlemeyi\s+kapat|dinlemeyi\s+durdur|sohbeti\s+ve\s+telefonu\s+kapat)\b/.test(
+      words.length <= 8 &&
+      (/\b(?:telefon\w*|sohbet\w*|arama\w*|cagri\w*|asistan\w*|dinleme\w*|mikrofon\w*|sesli\s+arama\w*|sesli\s+asistan\w*)\b.*\b(?:kapat\w*|durdur\w*|dur\b|bitir\w*|sonlandir\w*|kes\w*|stop\b)\b/.test(
         norm
-      )
+      ) ||
+        /\b(?:kapat\w*|durdur\w*|dur\b|bitir\w*|sonlandir\w*|kes\w*|stop\b)\b.*\b(?:telefon\w*|sohbet\w*|arama\w*|cagri\w*|asistan\w*|dinleme\w*|mikrofon\w*)\b/.test(
+          norm
+        ))
     ) {
       return true;
     }
@@ -963,7 +993,7 @@ export default function HomePage() {
         const blob = new Blob(finalChunks, {
           type: recToStop.mimeType || "audio/webm",
         });
-        if (blob.size < 800) {
+        if (blob.size < 1200) {
           if (callActiveRef.current && !callExecutingRef.current) {
             startCallListeningCycle();
           }
@@ -1023,24 +1053,24 @@ export default function HomePage() {
                 interim += event.results[i][0].transcript;
               }
             }
+            const cleanFinal = finalAcc.trim();
             const combined = (finalAcc + interim).trim();
             if (combined) {
               callTranscriptBufferRef.current = combined;
               setCallLiveTranscript(combined);
               setCallIsRecordingSpeech(true);
 
-              // Instant voice hangup / stop interception ("sohbeti ve telefonu kapat", "stop", "dur", "kapat")
-              if (isClientStopOrHangupCommand(combined)) {
+              // Only check instant stop/pause on FINALIZED speech segments (never on partial interim guesses like "dur" inside "dörtte")
+              if (cleanFinal && isClientStopOrHangupCommand(cleanFinal)) {
                 if (callSilenceTimeoutRef.current) {
                   clearTimeout(callSilenceTimeoutRef.current);
                   callSilenceTimeoutRef.current = null;
                 }
-                triggerVoiceHangupAndClose(combined);
+                triggerVoiceHangupAndClose(cleanFinal);
                 return;
               }
 
-              // Instant pause / mute mode interception ("dinlemeyi duraklat", "sessize al")
-              if (isClientPauseListeningCommand(combined)) {
+              if (cleanFinal && isClientPauseListeningCommand(cleanFinal)) {
                 if (callSilenceTimeoutRef.current) {
                   clearTimeout(callSilenceTimeoutRef.current);
                   callSilenceTimeoutRef.current = null;
@@ -1065,7 +1095,7 @@ export default function HomePage() {
                   ) {
                     executeCallCommand(spoken);
                   }
-                }, 1500);
+                }, 1300);
               }
             }
           };
@@ -1095,7 +1125,7 @@ export default function HomePage() {
         } catch {}
       }
 
-      // 2. Attach MediaRecorder + Sensitive Voice Activity Detection (Gemini 2.5 Flash Audio STT)
+      // 2. Attach MediaRecorder + Voice Activity Detection (Gemini Flash Audio STT fallback)
       if (!stream) return;
       try {
         callAudioChunksRef.current = [];
@@ -1105,6 +1135,13 @@ export default function HomePage() {
         recorder.ondataavailable = (ev) => {
           if (ev.data && ev.data.size > 0) {
             callAudioChunksRef.current.push(ev.data);
+            // Keep first chunk (WebM EBML header) + last 45 chunks (~9 seconds) so audio uploads are fast
+            if (callAudioChunksRef.current.length > 48) {
+              callAudioChunksRef.current = [
+                callAudioChunksRef.current[0],
+                ...callAudioChunksRef.current.slice(-45),
+              ];
+            }
           }
         };
 
@@ -1152,12 +1189,12 @@ export default function HomePage() {
             );
             setCallMicLevel(visualLevel);
 
-            // Require sustained human voice (rms > 0.032 or peak > 0.11 for >= 4 consecutive ticks = ~480ms)
-            // so background room hum or brief clicks never trigger false recordings!
-            if (rms > 0.032 || peak > 0.11) {
+            // Require sustained human voice (rms > 0.042 or peak > 0.14 for >= 6 consecutive ticks = ~720ms)
+            // so background room hum or brief clicks never trigger false dead-mic recordings!
+            if (rms > 0.042 || peak > 0.14) {
               consecutiveVoiceFrames += 1;
               silenceSinceMs = Date.now();
-              if (consecutiveVoiceFrames >= 4) {
+              if (consecutiveVoiceFrames >= 6) {
                 hasSpokenInCycle = true;
                 setCallIsRecordingSpeech(true);
               }
@@ -1166,7 +1203,7 @@ export default function HomePage() {
               if (
                 hasSpokenInCycle &&
                 callHandsFreeRef.current &&
-                Date.now() - silenceSinceMs > 1600
+                Date.now() - silenceSinceMs > 1750
               ) {
                 hasSpokenInCycle = false;
                 flushCallSpeechNow();

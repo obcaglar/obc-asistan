@@ -120,6 +120,7 @@ export interface AssistantProcessResult {
 
 export function isHangupOrStopCommand(rawText?: string): boolean {
   if (!rawText) return false;
+  if (isBotReplyEcho(rawText)) return false;
   const norm = rawText
     .toLocaleLowerCase("tr-TR")
     .replace(/ç/g, "c")
@@ -133,34 +134,50 @@ export function isHangupOrStopCommand(rawText?: string): boolean {
     .trim();
   if (!norm) return false;
 
+  // Never trigger hangup on instruction echoes or when the user is issuing a calendar/note/drive/photo/contact command
+  if (
+    /\b(?:diyebilirsiniz|kapatmak\s+icin|durdurmak\s+icin)\b/.test(norm)
+  ) {
+    return false;
+  }
+
+  // Explicit multi-word hangup phrases always win
+  if (
+    /\b(?:sohbeti\s+ve\s+telefonu\s+kapat\w*|telefonu\s+ve\s+sohbeti\s+kapat\w*|telefonu\s+kapat\w*|sohbeti\s+kapat\w*|aramayi\s+kapat\w*|aramayi\s+sonlandir\w*|cagriyi\s+kapat\w*|cagriyi\s+sonlandir\w*|asistani\s+kapat\w*|asistani\s+durdur\w*|dinlemeyi\s+kapat\w*|dinlemeyi\s+durdur\w*|sesli\s+aramayi\s+kapat\w*)\b/.test(
+      norm
+    )
+  ) {
+    return true;
+  }
+
+  // If the sentence contains workspace command words (calendar, agenda, note, drive, photo, contact), never treat it as a hangup command
+  if (
+    /\b(?:toplanti\w*|etkinlik\w*|etkinlig\w*|takvim\w*|ajanda\w*|randevu\w*|not\b|notu\b|notunu\b|gorev\w*|hatirlat\w*|ekle\w*|olustur\w*|planla\w*|ayarla\w*|kaydet\w*|rehber\w*|dosya\w*|belge\w*|fotograf\w*|resim\w*|paylas\w*|gonder\w*|saat\b|yarin\b|bugun\b)\b/.test(
+      norm
+    )
+  ) {
+    return false;
+  }
+
   // 1. Standalone or short direct stop/hangup commands ("stop", "dur", "durdur", "kapat", "sohbeti kapat", "telefonu kapat")
   if (
-    /^(?:lutfen\s+|simdi\s+|hemen\s+|artik\s+|tamam\s+|tesekkurler\s+|peki\s+)*(?:stop|dur|durdur|kapat|kapatalim|bitir|bitirelim|sonlandir|sus|yeter|bu\s+kadar\s+yeter|hosca\s*kal|gorusuruz|iyi\s+gunler\s+kapat)(?:\s+lutfen|\s+artik|\s+hemen|\s+simdi|\s+asistan|\s+obc|\s+onur\s+bey)*$/.test(
+    /^(?:lutfen\s+|simdi\s+|hemen\s+|artik\s+|tamam\s+|tesekkurler\s+|peki\s+|asistan\s+|obc\s+|onur\s+bey\s+)*(?:stop|dur|durdur|kapat|kapatalim|bitir|bitirelim|sonlandir|sus|yeter|bu\s+kadar\s+yeter|hosca\s*kal|gorusuruz|iyi\s+gunler\s+kapat)(?:\s+lutfen|\s+artik|\s+hemen|\s+simdi|\s+asistan|\s+obc|\s+onur\s+bey)*$/.test(
       norm
     )
   ) {
     return true;
   }
 
-  // 2. Explicit target + close/stop verb ("sohbeti ve telefonu kapat", "aramayı kapat", "asistanı durdur", "dinlemeyi kapat", "telefonu kapat")
-  if (
-    /\b(?:telefon\w*|sohbet\w*|arama\w*|gorusme\w*|cagri\w*|asistan\w*|dinleme\w*|mikrofon\w*|sesli\s+arama\w*|sesli\s+asistan\w*|konusma\w*)\b.*\b(?:kapat\w*|durdur\w*|dur\b|bitir\w*|sonlandir\w*|kes\w*|stop\b|iptal\s+et\w*)\b/.test(
-      norm
-    ) ||
-    /\b(?:kapat\w*|durdur\w*|dur\b|bitir\w*|sonlandir\w*|kes\w*|stop\b)\b.*\b(?:telefon\w*|sohbet\w*|arama\w*|gorusme\w*|cagri\w*|asistan\w*|dinleme\w*|mikrofon\w*|konusma\w*)\b/.test(
-      norm
-    )
-  ) {
-    return true;
-  }
-
-  // 3. Any utterance <= 12 words containing "stop", "durdur", "telefonu kapat", "sohbeti kapat", "aramayi kapat", "asistani kapat"
+  // 2. Short target + close/stop verb (<= 8 words, excluding "gorusmeyi iptal et" which is a calendar cancellation)
   const words = norm.split(/\s+/);
   if (
-    words.length <= 12 &&
-    /\b(?:stop|durdur|telefonu\s+kapat|sohbeti\s+kapat|aramayi\s+kapat|gorusmeyi\s+kapat|asistani\s+kapat|dinlemeyi\s+kapat|dinlemeyi\s+durdur|sohbeti\s+ve\s+telefonu\s+kapat)\b/.test(
+    words.length <= 8 &&
+    (/\b(?:telefon\w*|sohbet\w*|arama\w*|cagri\w*|asistan\w*|dinleme\w*|mikrofon\w*|sesli\s+arama\w*|sesli\s+asistan\w*)\b.*\b(?:kapat\w*|durdur\w*|dur\b|bitir\w*|sonlandir\w*|kes\w*|stop\b)\b/.test(
       norm
-    )
+    ) ||
+      /\b(?:kapat\w*|durdur\w*|dur\b|bitir\w*|sonlandir\w*|kes\w*|stop\b)\b.*\b(?:telefon\w*|sohbet\w*|arama\w*|cagri\w*|asistan\w*|dinleme\w*|mikrofon\w*)\b/.test(
+        norm
+      ))
   ) {
     return true;
   }
@@ -1058,13 +1075,29 @@ export function parseCommandLocally(
 
   // 2. CALENDAR / MEETING / TASK (CREATE, UPDATE, DELETE, SHARE/SEND)
   const parsedDateInfo = parseDateAndTimeFromTurkishText(text);
+  const hasAgendaOrCalendarWord =
+    /\b(ajanda\w*|takvim\w*|toplant[ıi]\w*|etkinli[kğ]\w*|randevu\w*|g[öo]r[üu][şs]me\w*)\b/i.test(
+      lower
+    );
+  const hasNoteCreationPhrase =
+    lower.includes("not al") ||
+    lower.includes("not et") ||
+    lower.includes("not ekle") ||
+    lower.includes("not düş") ||
+    lower.includes("not bırak") ||
+    lower.includes("not kaydet") ||
+    lower.includes("not defterine") ||
+    lower.includes("iş olarak") ||
+    lower.includes("is olarak") ||
+    lower.includes("görev olarak ata") ||
+    lower.includes("gorev olarak ata");
   const isExplicitNote =
     lower.startsWith("!not") ||
     lower.startsWith("!iş") ||
     lower.startsWith("!is") ||
-    lower.includes("not al") ||
-    lower.includes("not et") ||
-    lower.includes("not defterine") ||
+    (!hasAgendaOrCalendarWord &&
+      !parsedDateInfo.hasExplicitTime &&
+      hasNoteCreationPhrase) ||
     lower.includes("iş olarak") ||
     lower.includes("is olarak") ||
     lower.includes("görev olarak ata") ||
@@ -1083,6 +1116,9 @@ export function parseCommandLocally(
 
   const isExplicitDrive =
     !isExplicitPhotos &&
+    !hasAgendaOrCalendarWord &&
+    !hasNoteCreationPhrase &&
+    !parsedDateInfo.hasExplicitTime &&
     (lower.startsWith("!drive") ||
       lower.startsWith("!dosya") ||
       lower.startsWith("!belge") ||
@@ -1194,8 +1230,9 @@ export function parseCommandLocally(
         ""
       )
       .replace(/\bsonra\s+bir\s+(?:kullanıcı|kullanici|kişi|kisi)\b.*$/i, "")
+      .replace(/\b(?:onur\s+bey['’]?in|onur['’]?un)\b/gi, " ")
       .replace(
-        /(?:^|\s)(ajandama|ajandaya|ajandada|ajandadan|ajanda|takvimime|takvimdeki|takvimden|takvime|takvimde|takvim|için|icin|gibi|bir\s+tane|bir\s+adet|etkinlik|etkinliği|etkinligi|etkinliğini|etkinligini|toplantı|toplanti|toplantısı|toplantisi|toplantısını|toplantisini|toplantıyı|toplantiyi|randevu|randevusu|randevusunu|görev|gorev|görevi|gorevi|görevini|gorevini|konularını|konularini|konuşacağız|konusacagiz|girer\s*misin\w*|girermisin\w*|ekler\s*misin\w*|eklermisin\w*|açar\s*mısın\w*|acarmisin\w*|yapabilir\s*misin\w*|yapar\s*mısın\w*|girip|gir|planla\w*|ayarla\w*|ekleyip|eklemeni|ekle|oluşturup|oluşturmanı|olusturmani|oluştur|olustur|kaydedip|kaydet\w*|açmanı|acmani|açıp|aç|ac|sil|kaldır|kaldir|iptal\s*et|iptal|güncelle|guncelle|değiştir|degistir|ertele|taşı|tasi|öne|one|ileriye|ileri|geriye|geri|sonraya|çekmeni|cekmeni|çek|cek|almanı|al|istiyorum|isterim|lütfen|lutfen|gönder\w*|gonder\w*|davet\s*et|davet|paylaş\w*|paylas\w*|adresine|hesabına|hesabina|gmail|mailine|epostasına|e-postasına|epostaya|e-postaya|kullanıcısına|kişisine|eşim|esim|rehberdeki|olan|bu|bana|hemen|şimdi|simdi|daki|deki|taki|teki)(?=\s|$|[.,;:!?'’])/gi,
+        /(?:^|\s)(ajandasına|ajandasina|ajandama|ajandaya|ajandada|ajandadan|ajanda|takvimine|takvimime|takvimdeki|takvimden|takvime|takvimde|takvim|notunu|notu|not|için|icin|gibi|bir\s+tane|bir\s+adet|etkinlik|etkinliği|etkinligi|etkinliğini|etkinligini|toplantı|toplanti|toplantısı|toplantisi|toplantısını|toplantisini|toplantıyı|toplantiyi|randevu|randevusu|randevusunu|görev|gorev|görevi|gorevi|görevini|gorevini|konularını|konularini|konuşacağız|konusacagiz|girer\s*misin\w*|girermisin\w*|ekler\s*misin\w*|eklermisin\w*|açar\s*mısın\w*|acarmisin\w*|yapabilir\s*misin\w*|yapar\s*mısın\w*|girip|gir|planla\w*|ayarla\w*|ekleyip|eklemeni|ekle|oluşturup|oluşturmanı|olusturmani|oluştur|olustur|kaydedip|kaydet\w*|yaz\w*|düş\w*|dus\w*|bırak\w*|birak\w*|açmanı|acmani|açıp|aç|ac|sil|kaldır|kaldir|iptal\s*et|iptal|güncelle|guncelle|değiştir|degistir|ertele|taşı|tasi|öne|one|ileriye|ileri|geriye|geri|sonraya|çekmeni|cekmeni|çek|cek|almanı|al|istiyorum|isterim|lütfen|lutfen|gönder\w*|gonder\w*|davet\s*et|davet|paylaş\w*|paylas\w*|adresine|hesabına|hesabina|gmail|mailine|epostasına|e-postasına|epostaya|e-postaya|kullanıcısına|kişisine|eşim|esim|rehberdeki|olan|bu|bana|hemen|şimdi|simdi|daki|deki|taki|teki)(?=\s|$|[.,;:!?'’])/gi,
         " "
       )
       .replace(/["'“”«»]/g, "")
@@ -1494,8 +1531,8 @@ Kullanıcının gönderdiği metni veya Türkçe ses kaydını (Voice Message) �
 }
 Kurallar:
 0. ARKA PLAN KONUŞMASI VE ORTAM SESİ FİLTRESİ (ÇOK ÖNEMLİ):
-   - Eğer ses kaydında asistana yönelik AÇIK BİR KOMUT YOKSA (örneğin odadaki kişilerin kendi arasındaki günlük sohbeti, televizyon/telefon sesi, yarım kalmış anlamsız kelimeler veya sadece ortam gürültüsü varsa) KESİNLİKLE "intent": "help" döndür!
-   - Kullanıcının açıkça "not al", "kaydet", "hatırlat", "iş olarak ata", "görev ekle" demediği rastgele günlük konuşmaları ASLA "note" veya "calendar" olarak kaydetme!
+   - Sadece asistana yönelik hiçbir komut içermeyen anlamsız ortam gürültüsü veya ilgisiz televizyon sesi varsa "intent": "help" döndür.
+   - ANCAK ses kaydında veya mesajda "toplantı", "etkinlik", "randevu", "takvim", "ajanda", "görüşme", "not", "hatırlat", "görev", "ekle", "oluştur", "aç", "planla", "ayarla", "kaydet", "yaz", "sil", "güncelle" VEYA bir saat/tarih (Örn: "14:00'e ...", "yarın saat 3'te ...") geçiyorsa KESİNLİKLE "calendar" veya "note" olarak işle, ASLA "help" döndürme!
 1. YENİ ETKİNLİK EKLEYİP BİR KİŞİYE GÖNDERME ("create" + katılımcı daveti) KESİN KURALI:
    - Eğer kullanıcı YENİ bir etkinlik/görev girilmesini ve aynı zamanda bir kişiye/e-postaya gönderilmesini istiyorsa (Örn: "Sabah 08:30'a kahvaltı ve okula gidiş etkinliği girip eşim Esmeray'ın gmail hesabına gönder", "Yarın 14:00'e toplantı ekleyip Ali'ye gönder"), "action" KESİNLİKLE "create" olmalıdır!
    - Bu durumda ASLA "share" veya "update" seçme ve takvim listesindeki başka bir etkinliği (Örn: 09:00'daki Passolig vb.) ASLA seçme!
@@ -1507,8 +1544,10 @@ Kurallar:
    - Silme veya güncellemede yukarıdaki Güncel Google Takvim Listesinden SADECE kullanıcının söylediği gün, saat ve başlıkla gerçekten örtüşen etkinliği seç. İsimleri hiç benzemeyen başka bir etkinliği (Örn: Kahvaltı yerine Passolig) ASLA eşleştirme!
 3. SESLİ KOMUT (VOICE) ÇÖZÜMLEME VE HASSASİYET KURALLARI:
    - Sesli söylenen saatleri 24 saatlik HH:mm formatına çevir (Örn: "sabah sekiz buçuk / 08.30" -> "08:30", "iki buçuk / on dört otuz" -> "14:30", "üç buçuk" -> "15:30", "dörtte / on altıda" -> "16:00").
-4. TAKVİM / AJANDA ("calendar") vs NOT & İŞ ATAMASI ("note") AYRIMI:
-   - Mesaj "!not", "!iş" ile başlıyorsa VEYA "not al", "not et", "iş olarak ata", "iş olarak gönder", "görev olarak ata" içeriyorsa intent KESİNLİKLE "note" olmalıdır!
+4. TAKVİM / AJANDA ("calendar") VE AJANDA NOTU / GÖREV ("note") KURALI:
+   - Kullanıcı veya kullanıcının bir arkadaşı "ajandama not ekle", "ajandaya not ekle", "Onur Bey'in ajandasına not ekle", "takvime not düş", "etkinlik aç", "toplantı ekle", "randevu oluştur" dediğinde:
+     * Belirli bir saat, gün veya ajanda/takvim/etkinlik/toplantı kaydı ise "intent": "calendar", "action": "create" seç; "calendar.title" alanına temiz not/etkinlik başlığını, "calendar.date" ve "calendar.startTime"/"endTime" alanlarına tarih ve saati yaz (Saat belirtilmediyse "10:00" - "11:00" yaz).
+     * Mesaj "!not", "!iş" ile başlıyorsa VEYA "not al", "not et", "iş olarak ata", "iş olarak gönder", "görev olarak ata" içeriyorsa "intent": "note", "action": "create" seç.
    - "note" (Google Tasks / İş Ataması) işleminde kullanıcı bir e-posta adresi veya Google Rehber'deki bir kişiyi belirttiyse (Örn: "Ali Sunal'a iş olarak ata", "eşim Esmeray'a iş olarak gönder", "ahmet@ornek.com adresine gönder"), kişinin sadece ismini "recipientQuery" alanına (Örn: "Ali Sunal", "Esmeray"), açık e-posta söylediyse "recipientEmail" alanına yaz; "note.title" ve "note.content" alanlarına ise sadece saf görev/not metnini yaz (kişi adını ve 'iş olarak ata/gönder' ifadesini not içeriğine dahil etme).
 5. GOOGLE PHOTOS ("photos") KESİN KURALI:
    - Mesajda "!foto", "!photos", "fotoğraf", "fotoğraflarımı", "resim", "görsel", "albüm", "çekildiğimiz fotoğraf", "çekilmiş fotoğraf", "Google Photos" geçiyorsa intent KESİNLİKLE "photos" olmalıdır!
@@ -1537,9 +1576,9 @@ Kurallar:
     parts.push({ text: `Kullanıcı mesajı: ${params.text}` });
   }
 
-  // Verified 1.2s ultra-fast models with active quota on this API key
+  // Verified ~1s ultra-fast models with active quota on this API key
   const candidateModels = [
-    "gemini-3.1-flash-lite",
+    "gemini-2.5-flash",
     "gemini-3.1-flash-lite-preview",
     "gemini-flash-lite-latest",
   ];
@@ -1552,7 +1591,7 @@ Kurallar:
           method: "POST",
           cache: "no-store",
           headers: { "Content-Type": "application/json" },
-          signal: AbortSignal.timeout(6500),
+          signal: AbortSignal.timeout(5500),
           body: JSON.stringify({
             contents: [{ parts }],
             generationConfig: {
@@ -1600,12 +1639,19 @@ Kurallar:
   return null;
 }
 
+let cachedOAuthAccessToken: string | null = null;
+let cachedOAuthExpiresAt = 0;
+
 export async function resolveGoogleAccessToken(
   creds: AssistantCredentials
 ): Promise<string | null> {
   loadFreshEnv();
   if (creds.googleAccessToken) {
     return creds.googleAccessToken;
+  }
+
+  if (cachedOAuthAccessToken && Date.now() < cachedOAuthExpiresAt) {
+    return cachedOAuthAccessToken;
   }
 
   const clientId = process.env.GOOGLE_CLIENT_ID || creds.googleClientId;
@@ -1651,7 +1697,11 @@ export async function resolveGoogleAccessToken(
 
       if (!res.ok) continue;
       const data = await res.json();
-      if (data.access_token) return data.access_token;
+      if (data.access_token) {
+        cachedOAuthAccessToken = data.access_token;
+        cachedOAuthExpiresAt = Date.now() + 45 * 60 * 1000;
+        return data.access_token;
+      }
     } catch {
       continue;
     }
@@ -1750,9 +1800,15 @@ function extractDistinctCalendarWords(query: string): string[] {
     .filter((w) => w.length >= 3 && !GENERIC_CALENDAR_STOPWORDS.has(w));
 }
 
+let cachedCalendarSummaryText = "";
+let cachedCalendarSummaryExpiresAt = 0;
+
 async function getUpcomingCalendarSummaryForPrompt(
   accessToken: string
 ): Promise<string> {
+  if (cachedCalendarSummaryText && Date.now() < cachedCalendarSummaryExpiresAt) {
+    return cachedCalendarSummaryText;
+  }
   try {
     const minDate = new Date(Date.now() - 12 * 3600 * 1000).toISOString();
     const maxDate = new Date(Date.now() + 14 * 86400 * 1000).toISOString();
@@ -1760,6 +1816,7 @@ async function getUpcomingCalendarSummaryForPrompt(
     const res = await fetch(url, {
       cache: "no-store",
       headers: { Authorization: `Bearer ${accessToken}` },
+      signal: AbortSignal.timeout(3000),
     });
     if (!res.ok) return "";
     const data = await res.json();
@@ -1774,7 +1831,9 @@ async function getUpcomingCalendarSummaryForPrompt(
       const title = String(item.summary || "İsimsiz Etkinlik").trim();
       lines.push(`- [${datePart} ${timePart}] "${title}"`);
     }
-    return lines.join("\n");
+    cachedCalendarSummaryText = lines.join("\n");
+    cachedCalendarSummaryExpiresAt = Date.now() + 20000;
+    return cachedCalendarSummaryText;
   } catch {
     return "";
   }
@@ -2892,7 +2951,8 @@ async function createGoogleTaskAndAssignment(
   note: { title: string; content: string; category: string },
   rawTranscript: string,
   recipientEmail?: string,
-  recipientQuery?: string
+  recipientQuery?: string,
+  callerAttribution?: string
 ): Promise<{
   ok: boolean;
   syncedToTasks: boolean;
@@ -2902,6 +2962,7 @@ async function createGoogleTaskAndAssignment(
   invitedEmails: string[];
   resolvedContactName?: string;
   htmlLink?: string;
+  calendarEvent?: CalendarItem;
   error?: string;
 }> {
   if (!accessToken) {
@@ -2955,9 +3016,12 @@ async function createGoogleTaskAndAssignment(
     const taskTitle =
       emails.length > 0
         ? `${note.content} [İş Atanan: ${resolvedContactName || emails[0]}]`
-        : note.content;
+        : callerAttribution
+          ? `${note.content} [Ekleyen: ${callerAttribution}]`
+          : note.content;
     const taskNotes =
       `Kategori: ${note.category}` +
+      (callerAttribution ? `\nEkleyen Kişi (Google Rehber): ${callerAttribution}` : "") +
       (emails.length > 0
         ? `\nİş Atanan Kişi: ${resolvedContactName ? `${resolvedContactName} (${emails.join(", ")})` : emails.join(", ")}`
         : "") +
@@ -3000,13 +3064,17 @@ async function createGoogleTaskAndAssignment(
     lastError = err instanceof Error ? err.message : "Google Tasks hatası";
   }
 
-  // 3. Also sync as a Google Calendar Task / İş Ataması
-  // - Sends official Google Task Assignment email (?sendUpdates=all) when a contact/email is specified
-  // - Ensures immediate visibility on Google Calendar/Tasks even if Tasks OAuth scope hasn't been re-consented yet
+  // 3. Also sync as a Google Calendar Agenda Entry / Task
+  const summaryPrefix =
+    emails.length > 0 ? "📋 [İş Ataması / Görev]:" : "📝 [Ajanda Notu]:";
+  const summaryText = `${summaryPrefix} ${note.content}${callerAttribution ? ` (${callerAttribution})` : ""}`.slice(0, 180);
+  const attendeeText =
+    resolvedContactName ||
+    (emails.length > 0
+      ? emails.join(", ")
+      : callerAttribution || "WhatsApp Kullanıcısı");
+
   try {
-    const summaryPrefix =
-      emails.length > 0 ? "📋 [İş Ataması / Görev]:" : "📝 [Görev / Not]:";
-    const summaryText = `${summaryPrefix} ${note.content}`.slice(0, 180);
     const calRes = await createGoogleCalendarEvent(
       accessToken,
       {
@@ -3014,14 +3082,14 @@ async function createGoogleTaskAndAssignment(
         date: dueDateStr,
         startTime,
         endTime,
-        attendee:
-          resolvedContactName ||
-          (emails.length > 0 ? emails.join(", ") : "WhatsApp Kullanıcısı"),
+        attendee: attendeeText,
         attendeeEmail: emails.length > 0 ? emails.join(", ") : undefined,
         location:
           emails.length > 0
             ? `İş Ataması (${resolvedContactName || emails[0]})`
-            : "Google Tasks / Notlar",
+            : callerAttribution
+              ? `Google Takvim Ajanda Notu (${callerAttribution})`
+              : "Google Takvim / Ajanda Notları",
       },
       recipientQuery
     );
@@ -3038,6 +3106,23 @@ async function createGoogleTaskAndAssignment(
     }
   }
 
+  const calendarEvent: CalendarItem = {
+    id: "evt-note-" + Date.now(),
+    title: summaryText,
+    date: dueDateStr,
+    startTime,
+    endTime,
+    attendee: attendeeText,
+    attendeeEmail: emails.length > 0 ? emails.join(", ") : undefined,
+    location: callerAttribution
+      ? `Ajanda Notu (${callerAttribution})`
+      : "Google Takvim / Ajanda Notları",
+    source: "📝 Ajanda Notu",
+    createdTime: "Şimdi",
+    htmlLink,
+    syncedWithGoogle: syncedToCalendar,
+  };
+
   return {
     ok: syncedToTasks || syncedToCalendar,
     syncedToTasks,
@@ -3047,6 +3132,7 @@ async function createGoogleTaskAndAssignment(
     invitedEmails: emails,
     resolvedContactName,
     htmlLink,
+    calendarEvent,
     error: lastError,
   };
 }
@@ -4915,12 +5001,112 @@ export function buildNaturalSpokenReply(res: AssistantProcessResult): string {
   return "Buyurun Onur Bey, sizi dinliyorum. Takvim, rehber, görev, Google Photos veya Drive için ne yapmamı istersiniz?";
 }
 
+async function resolveCallerContactFromGoogle(
+  accessToken: string | null,
+  senderName?: string,
+  senderPhone?: string,
+  transcript?: string
+): Promise<{
+  isExternalFriend: boolean;
+  inGoogleContacts: boolean;
+  displayName: string;
+  phone?: string;
+  email?: string;
+  attributionLabel?: string;
+}> {
+  const rawName = (senderName || "").trim();
+  const rawPhoneDigits = (senderPhone || "").replace(/\D/g, "");
+  const last10Digits =
+    rawPhoneDigits.length >= 10 ? rawPhoneDigits.slice(-10) : rawPhoneDigits;
+
+  // Check if the caller introduced themselves in the text ("Ben Ahmet Yılmaz, ...", "Merhaba ben Esmeray ...")
+  let introName = "";
+  if (transcript) {
+    const introMatch = transcript.match(
+      /^(?:merhaba\s+|selam\s+|alo\s+)*ben\s+([A-ZÇĞİÖŞÜa-zçğıöşü]{2,20}(?:\s+[A-ZÇĞİÖŞÜa-zçğıöşü]{2,20})?)(?=\s*[,.:;-]|\s+(?:onur|ajanda|takvim|yarın|yarin|bugün|bugun|saat))/i
+    );
+    if (introMatch && introMatch[1]) {
+      introName = introMatch[1].trim();
+    }
+  }
+
+  const candidateName = introName || rawName;
+  const normCandidate = normalizeTr(candidateName);
+
+  // If the caller is Onur Bey himself (or assistant number 5491007729), no external friend attribution needed
+  const isOwnerName =
+    !normCandidate ||
+    /\b(onur\s+baran|onur\s+caglar|dr\s+onur|obc\s*asistan)\b/.test(normCandidate) ||
+    normCandidate === "onur" ||
+    normCandidate === "siz";
+  const isOwnerPhone =
+    !last10Digits || last10Digits === "5491007729";
+
+  if (isOwnerName && isOwnerPhone && !introName) {
+    return {
+      isExternalFriend: false,
+      inGoogleContacts: false,
+      displayName: "Onur Bey",
+    };
+  }
+
+  if (accessToken) {
+    const queries = [candidateName, last10Digits].filter(
+      (q) => q && q.length >= 2
+    );
+    for (const q of queries) {
+      const matches = await findAllMatchingGooglePersonContacts(accessToken, q);
+      if (matches.length > 0) {
+        const p = matches[0];
+        const foundName = String(
+          p.names?.[0]?.displayName || candidateName || "Rehberdeki Arkadaşınız"
+        ).trim();
+        const foundPhone = String(p.phoneNumbers?.[0]?.value || senderPhone || "").trim();
+        const foundEmail = String(p.emailAddresses?.[0]?.value || "").trim();
+        return {
+          isExternalFriend: true,
+          inGoogleContacts: true,
+          displayName: foundName,
+          phone: foundPhone || undefined,
+          email: foundEmail || undefined,
+          attributionLabel: `${foundName} (Google Rehber ✅)`,
+        };
+      }
+    }
+  }
+
+  const fallbackName =
+    candidateName && !isOwnerName
+      ? candidateName
+      : last10Digits
+        ? `+90${last10Digits}`
+        : "";
+  if (fallbackName) {
+    return {
+      isExternalFriend: true,
+      inGoogleContacts: false,
+      displayName: fallbackName,
+      phone: senderPhone,
+      attributionLabel: `${fallbackName} (WhatsApp)`,
+    };
+  }
+
+  return {
+    isExternalFriend: false,
+    inGoogleContacts: false,
+    displayName: "Onur Bey",
+  };
+}
+
 export async function processAssistantInput(params: {
   text?: string;
   audioBase64?: string;
   mimeType?: string;
   isVoice?: boolean;
   credentials?: AssistantCredentials;
+  senderName?: string;
+  senderPhone?: string;
+  isExternalCaller?: boolean;
   _skipChaining?: boolean;
 }): Promise<AssistantProcessResult> {
   const result = await processAssistantInputCore(params);
@@ -4963,6 +5149,9 @@ async function processAssistantInputCore(params: {
   mimeType?: string;
   isVoice?: boolean;
   credentials?: AssistantCredentials;
+  senderName?: string;
+  senderPhone?: string;
+  isExternalCaller?: boolean;
   _skipChaining?: boolean;
 }): Promise<AssistantProcessResult> {
   loadFreshEnv();
@@ -5117,6 +5306,9 @@ async function processAssistantInputCore(params: {
           text: cmdText,
           isVoice,
           credentials: creds,
+          senderName: params.senderName,
+          senderPhone: params.senderPhone,
+          isExternalCaller: params.isExternalCaller,
           _skipChaining: true,
         });
         if (!res.duplicate && res.replyText) {
@@ -5217,6 +5409,14 @@ async function processAssistantInputCore(params: {
     }
   }
 
+  // Resolve whether the sender/caller is a friend in Onur Bey's Google Contacts
+  const callerContact = await resolveCallerContactFromGoogle(
+    accessToken,
+    params.senderName,
+    params.senderPhone,
+    transcript
+  );
+
   // Hard guard: priority order is delete > update > create
   const normTranscriptForAction = normalizeTr(transcript);
   const hasExplicitDeleteWord =
@@ -5230,7 +5430,7 @@ async function processAssistantInputCore(params: {
   const hasExplicitCreateWord =
     !hasExplicitDeleteWord &&
     !hasExplicitUpdateWord &&
-    /\b(ekle\w*|olustur\w*|ayarla\w*|planla\w*|gir\b|girip\b|girer\s*misin\w*|girermisin\w*|girelim\b|girmesini\b|kaydet\w*|kaydedip\b|ac\b|acar\s*misin\w*)\b/.test(
+    /\b(ekle\w*|olustur\w*|ayarla\w*|planla\w*|gir\b|girip\b|girer\s*misin\w*|girermisin\w*|girelim\b|girmesini\b|kaydet\w*|kaydedip\b|ac\w*|yaz\w*|dus\w*|birak\w*)\b/.test(
       normTranscriptForAction
     );
 
@@ -5259,49 +5459,39 @@ async function processAssistantInputCore(params: {
   let syncedToGoogle = false;
   let googleSyncError: string | undefined;
 
-  // Guard against background room conversations on open microphone being misclassified as "note", "calendar", "contact", "drive", or "photos"
+  // Guard ONLY against pure uncommanded room noise (never block legitimate voice commands!)
   const hasRoomChatterWords =
-    /\b(yani|abi|abla|hocam|dedik|dedim|dedi|uyuyordur|bakayim|peruk|geliyor\s+ya|onlar\s+da|sey\b|falan|filan|iste\b|hani\b|bence|sanirim|galiba|herhalde|acaba|zaten|cunku|ama\b|fakat|neyse|vallahi|valla|diyorum|diyorsun|konustuk|yapiyoruz|gidiyoruz|baktim|scooter|kurye|superet|implant|anakart|kavurma|makin\w*)\b/.test(
+    /\b(uyuyordur|peruk|scooter|kurye|superet|kavurma)\b/.test(
       normTranscriptForAction
     );
 
   if (isVoice && parsed.intent === "note") {
     const hasExplicitNoteCommand =
       /^!not\b/i.test(transcript.trim()) ||
-      /\b(not\s+al\w*|not\s+ekle\w*|not\s+kaydet\w*|notu\s+kaydet\w*|gorev\s+ekle\w*|gorev\s+olustur\w*|is\s+olarak\s+ata\w*|hatirlat\w*|listeye\s+ekle\w*)\b/.test(
+      /\b(not\w*|gorev\w*|ajanda\w*|takvim\w*|is\s+olarak\w*|hatirlat\w*|listeye\w*|ekle\w*|kaydet\w*|yaz\w*|birak\w*|ata\w*)\b/.test(
         normTranscriptForAction
       );
-    const isTooLongForVoiceNote = transcript.trim().split(/\s+/).length > 22;
+    const isTooLongForVoiceNote = transcript.trim().split(/\s+/).length > 45;
     if (!hasExplicitNoteCommand || isTooLongForVoiceNote || hasRoomChatterWords) {
       parsed.intent = "help";
     }
   }
   if (isVoice && parsed.intent === "calendar") {
-    const hasExplicitCalVerb =
-      /\b(planla\w*|ayarla\w*|ekle\w*|olustur\w*|ac\b|acmani|acar\s*misin\w*|gir\b|girip\b|girer\s*misin\w*|kaydet\w*|davet\w*|gonder\w*|paylas\w*|sil\w*|iptal\w*|kaldir\w*|guncelle\w*|degistir\w*|ertele\w*|tasi\w*|one\s*cek\w*|ileri\w*\s*al\w*)\b/.test(
-        normTranscriptForAction
-      );
-    const hasExplicitCalNoun =
-      /\b(toplanti\w*|etkinlik\w*|etkinlig\w*|takvim\w*|randevu\w*|ajanda\w*|saat\b|yarin\b|bugun\b|haftaya\b)\b/.test(
+    const hasExplicitCalVerbOrNoun =
+      localParsed.hasExplicitTime ||
+      localParsed.hasExplicitDate ||
+      /\b(planla\w*|ayarla\w*|ekle\w*|olustur\w*|ac\w*|gir\w*|kaydet\w*|yaz\w*|dus\w*|birak\w*|koy\w*|davet\w*|gonder\w*|paylas\w*|sil\w*|iptal\w*|kaldir\w*|guncelle\w*|degistir\w*|ertele\w*|tasi\w*|cek\w*|al\w*|toplanti\w*|etkinlik\w*|etkinlig\w*|takvim\w*|randevu\w*|ajanda\w*|gorusme\w*|bulusma\w*|not\w*|gorev\w*|hatirlat\w*|saat\b|yarin\b|bugun\b|haftaya\b)\b/.test(
         normTranscriptForAction
       );
     const candidateCalTitle = String(
       parsed.calendar?.title || localParsed.calendar?.title || ""
     ).trim();
-    const normCandidateTitle = normalizeTr(candidateCalTitle);
     const isParagraphChatter =
-      candidateCalTitle.split(/\s+/).length > 6 ||
-      candidateCalTitle.length > 48 ||
-      transcript.trim().split(/\s+/).length > 20 ||
-      hasRoomChatterWords ||
-      /\b(yani|abi|dedik|uyuyordur|bakayim|peruk|kadar|geliyor|falan|filan|cunku|ama|zaten)\b/.test(
-        normCandidateTitle
-      );
-    if (
-      !hasExplicitCalVerb ||
-      (!hasExplicitCalNoun && !localParsed.hasExplicitTime) ||
-      isParagraphChatter
-    ) {
+      candidateCalTitle.split(/\s+/).length > 14 ||
+      candidateCalTitle.length > 95 ||
+      transcript.trim().split(/\s+/).length > 45 ||
+      hasRoomChatterWords;
+    if (!hasExplicitCalVerbOrNoun || isParagraphChatter) {
       parsed.intent = "help";
     }
   }
@@ -5315,7 +5505,7 @@ async function processAssistantInputCore(params: {
       );
     const candidateName = (parsed.contact?.name || localParsed.contact?.name || "").trim();
     const isLongSentenceNotName =
-      candidateName.split(/\s+/).length > 5 ||
+      candidateName.split(/\s+/).length > 6 ||
       hasRoomChatterWords ||
       /\b(toplanti\w*|takvim\w*|etkinlik\w*|istiyorum|konusacagiz|yapabilir|misin)\b/.test(
         normalizeTr(candidateName)
@@ -5326,11 +5516,11 @@ async function processAssistantInputCore(params: {
   }
   if (isVoice && (parsed.intent === "drive" || parsed.intent === "photos")) {
     const hasExplicitMediaVerb =
-      /\b(getir\w*|bul\w*|listele\w*|goster\w*|paylas\w*|gonder\w*|ac\b|acar\s*misin\w*|indir\w*|ara\w*|hangileri|numarayi|numarali|secenek\w*)\b/.test(
+      /\b(getir\w*|bul\w*|listele\w*|goster\w*|paylas\w*|gonder\w*|ac\w*|indir\w*|ara\w*|hangileri|numarayi|numarali|secenek\w*|fotograf\w*|resim\w*|dosya\w*|belge\w*|klasor\w*|drive\w*)\b/.test(
         normTranscriptForAction
       );
     const isMediaChatter =
-      transcript.trim().split(/\s+/).length > 22 || hasRoomChatterWords;
+      transcript.trim().split(/\s+/).length > 40 || hasRoomChatterWords;
     if (!hasExplicitMediaVerb || isMediaChatter) {
       parsed.intent = "help";
     }
@@ -5392,7 +5582,7 @@ async function processAssistantInputCore(params: {
     }
     calData.title = String(calData.title || localParsed.calendar?.title || "Planlanan Etkinlik")
       .replace(
-        /(?:\s+(?:etkinliği|etkinligi|etkinlik|toplantısı|toplantisi|toplantı|toplanti))?\s+(?:aç|ac|oluştur|olustur|ekle|ayarla|planla|gir)$/i,
+        /(?:\s+(?:diye|olarak))?(?:\s+(?:etkinliği|etkinligi|etkinlik|toplantısı|toplantisi|toplantı|toplanti|notu|not))?(?:\s+(?:aç|ac|oluştur|olustur|ekle|ayarla|planla|gir|kaydet|yaz|bırak|birak))?(?:\s+(?:diye|olarak))?$/i,
         ""
       )
       .trim();
@@ -5620,6 +5810,14 @@ async function processAssistantInputCore(params: {
       };
     }
 
+    if (
+      callerContact.isExternalFriend &&
+      callerContact.attributionLabel &&
+      (!calData.attendee || calData.attendee === "WhatsApp Kullanıcısı")
+    ) {
+      calData.attendee = callerContact.attributionLabel;
+    }
+
     let htmlLink: string | undefined;
     let invitedEmails: string[] | undefined;
     let resolvedContactName: string | undefined;
@@ -5651,7 +5849,9 @@ async function processAssistantInputCore(params: {
       ? resolvedContactName
         ? `${resolvedContactName} (${invitedEmails.join(", ")})`
         : invitedEmails.join(", ")
-      : calData.attendee || "WhatsApp Kullanıcısı";
+      : callerContact.isExternalFriend && callerContact.attributionLabel
+        ? callerContact.attributionLabel
+        : calData.attendee || "WhatsApp Kullanıcısı";
 
     const calendarEvent: CalendarItem = {
       id: "evt-" + Date.now(),
@@ -5662,17 +5862,25 @@ async function processAssistantInputCore(params: {
       attendee: attendeeDisplay,
       attendeeEmail: invitedEmails?.join(", ") || calData.attendeeEmail,
       location: calData.location || "Google Meet",
-      source: isVoice ? "🎙️ WhatsApp Sesli Komut" : "💬 WhatsApp Metin Komutu",
+      source: callerContact.isExternalFriend
+        ? `👤 ${callerContact.attributionLabel}`
+        : isVoice
+          ? "🎙️ WhatsApp Sesli Komut"
+          : "💬 WhatsApp Metin Komutu",
       createdTime: "Şimdi",
       htmlLink,
       syncedWithGoogle: syncedToGoogle,
     };
 
+    const callerLine =
+      callerContact.isExternalFriend && callerContact.attributionLabel
+        ? `\n👤 *Ajandaya Ekleyen Kişi:* ${callerContact.attributionLabel}`
+        : "";
     const linkLine = htmlLink ? `\n🔗 *Takvimde Görüntüle:* ${htmlLink}` : "";
     const syncTag = syncedToGoogle
       ? invitedEmails?.length
-        ? `\n📨 *Davet Gönderilen Alıcı:* ${attendeeDisplay}${linkLine}\n✅ *Gerçek Google Takvim'inize eklendi ve karşı tarafa resmi e-posta daveti gönderildi!*`
-        : `${linkLine}\n✅ *Gerçek Google Takvim'inize senkronize edildi!*`
+        ? `\n📨 *Davet Gönderilen Alıcı:* ${attendeeDisplay}${callerLine}${linkLine}\n✅ *Gerçek Google Takvim'inize eklendi ve karşı tarafa resmi e-posta daveti gönderildi!*`
+        : `${callerLine}${linkLine}\n✅ *Gerçek Google Takvim'inize senkronize edildi!*`
       : googleSyncError
         ? `\n⚠️ _${googleSyncError}_`
         : "";
@@ -5921,7 +6129,9 @@ async function processAssistantInputCore(params: {
       category:
         recipientEmail || recipientQuery
           ? "İş Ataması / Görev"
-          : parsed.note.category || "Google Tasks / Not",
+          : callerContact.isExternalFriend && callerContact.attributionLabel
+            ? `Ajanda Notu (${callerContact.displayName})`
+            : parsed.note.category || "Google Tasks / Not",
       time: "Şimdi",
     };
 
@@ -5930,7 +6140,8 @@ async function processAssistantInputCore(params: {
       note,
       transcript,
       recipientEmail,
-      recipientQuery
+      recipientQuery,
+      callerContact.isExternalFriend ? callerContact.attributionLabel : undefined
     );
 
     syncedToGoogle = taskSyncRes.ok;
@@ -5939,7 +6150,15 @@ async function processAssistantInputCore(params: {
     const hasAssignedPerson = taskSyncRes.invitedEmails.length > 0;
     const headerLine = hasAssignedPerson
       ? `📋 *Google Tasks & İş Ataması Oluşturuldu!*`
-      : `📝 *Google Tasks & Not Defterine Kaydedildi!*`;
+      : `📝 *Google Takvim (Ajanda) & Not Defterine Kaydedildi!*`;
+
+    const callerBlock =
+      callerContact.isExternalFriend && callerContact.attributionLabel
+        ? `\n👤 *Ajandaya Not Ekleyen Kişi:* ${callerContact.attributionLabel}`
+        : "";
+    const calSlotBlock = taskSyncRes.calendarEvent
+      ? `\n🗓️ *Ajanda Tarihi:* ${taskSyncRes.calendarEvent.date}, ${taskSyncRes.calendarEvent.startTime} - ${taskSyncRes.calendarEvent.endTime}`
+      : "";
 
     const assigneeBlock = hasAssignedPerson
       ? `\n👤 *İş Atanan Kişi:* ${
@@ -5952,9 +6171,9 @@ async function processAssistantInputCore(params: {
         : "";
 
     const syncStatusLine = taskSyncRes.syncedToTasks
-      ? `\n✅ *Google Tasks (Görevler) ve Takvim uygulamanıza senkronize edildi!*`
+      ? `\n✅ *Google Tasks (Görevler) ve Google Takvim (Ajanda) uygulamanıza senkronize edildi!*`
       : taskSyncRes.syncedToCalendar
-        ? `\n✅ *Google Takvim'e eklendi ve atanan kişiye e-posta gönderildi!*` +
+        ? `\n✅ *Google Takvim (Ajanda) uygulamanıza senkronize edildi!*` +
           (taskSyncRes.tasksServiceDisabled
             ? `\n⚙️ *Google Tasks Servisini 1 Tıkla Açın:* Google Cloud projenizde Tasks API kapalı olduğu için şu linkten "ETKİNLEŞTİR (ENABLE)" butonuna 1 kez basmanız yeterlidir: https://console.developers.google.com/apis/api/tasks.googleapis.com/overview?project=220430673297`
             : taskSyncRes.tasksScopeMissing
@@ -5968,7 +6187,7 @@ async function processAssistantInputCore(params: {
         : "") +
       `${headerLine}\n\n` +
       `📌 *Görev / Not:* "${note.content}"\n` +
-      `📂 *Kategori:* ${note.category}${assigneeBlock}${syncStatusLine}`;
+      `📂 *Kategori:* ${note.category}${calSlotBlock}${callerBlock}${assigneeBlock}${syncStatusLine}`;
 
     return {
       transcript,
@@ -5979,6 +6198,7 @@ async function processAssistantInputCore(params: {
       syncedToGoogle,
       googleSyncError,
       note,
+      calendarEvent: taskSyncRes.calendarEvent,
     };
   }
 

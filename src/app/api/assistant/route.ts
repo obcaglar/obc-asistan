@@ -108,6 +108,9 @@ export async function POST(request: NextRequest) {
       credentials,
       fromWhatsAppBot,
       fromLiveCall,
+      senderName,
+      senderPhone,
+      isExternalCaller,
     }: {
       text?: string;
       audioBase64?: string;
@@ -116,6 +119,9 @@ export async function POST(request: NextRequest) {
       credentials?: AssistantCredentials;
       fromWhatsAppBot?: boolean;
       fromLiveCall?: boolean;
+      senderName?: string;
+      senderPhone?: string;
+      isExternalCaller?: boolean;
     } = body;
 
     if (fromWhatsAppBot) {
@@ -142,6 +148,9 @@ export async function POST(request: NextRequest) {
       mimeType,
       isVoice,
       credentials,
+      senderName,
+      senderPhone,
+      isExternalCaller,
     });
 
     // If a real command or hangup was executed during a Live Voice Call, also queue its confirmation card for the user's WhatsApp chat!
