@@ -173,7 +173,20 @@ export function isBotReplyEcho(rawText?: string): boolean {
     norm.includes("buyrun ozgur bey") ||
     norm.includes("efendim ozgur bey") ||
     norm.includes("secenekler halinde listeledim") ||
-    norm.includes("simdi sizinle paylasiyorum")
+    norm.includes("simdi sizinle paylasiyorum") ||
+    norm.includes("takvim rehber gorev") ||
+    norm.includes("google photos veya drive") ||
+    norm.includes("photos veya drive icin") ||
+    norm.includes("konusunu google gorevler") ||
+    norm.includes("takvim listenize isledim") ||
+    norm.includes("google takvim inize ekledim") ||
+    norm.includes("google takviminize ekledim") ||
+    norm.includes("google rehber inize kaydettim") ||
+    norm.includes("google rehberinize kaydettim") ||
+    norm.includes("hangisini paylasmami istersiniz") ||
+    norm.includes("numarasini soyleyebilirsiniz") ||
+    norm.includes("komutu da sirasiyla yerine getirdim") ||
+    norm.includes("sesinizi cok net duyuyorum")
   );
 }
 
@@ -1329,6 +1342,9 @@ Kullanıcının gönderdiği metni veya Türkçe ses kaydını (Voice Message) �
   }
 }
 Kurallar:
+0. ARKA PLAN KONUŞMASI VE ORTAM SESİ FİLTRESİ (ÇOK ÖNEMLİ):
+   - Eğer ses kaydında asistana yönelik AÇIK BİR KOMUT YOKSA (örneğin odadaki kişilerin kendi arasındaki günlük sohbeti, televizyon/telefon sesi, yarım kalmış anlamsız kelimeler veya sadece ortam gürültüsü varsa) KESİNLİKLE "intent": "help" döndür!
+   - Kullanıcının açıkça "not al", "kaydet", "hatırlat", "iş olarak ata", "görev ekle" demediği rastgele günlük konuşmaları ASLA "note" veya "calendar" olarak kaydetme!
 1. YENİ ETKİNLİK EKLEYİP BİR KİŞİYE GÖNDERME ("create" + katılımcı daveti) KESİN KURALI:
    - Eğer kullanıcı YENİ bir etkinlik/görev girilmesini ve aynı zamanda bir kişiye/e-postaya gönderilmesini istiyorsa (Örn: "Sabah 08:30'a kahvaltı ve okula gidiş etkinliği girip eşim Esmeray'ın gmail hesabına gönder", "Yarın 14:00'e toplantı ekleyip Ali'ye gönder"), "action" KESİNLİKLE "create" olmalıdır!
    - Bu durumda ASLA "share" veya "update" seçme ve takvim listesindeki başka bir etkinliği (Örn: 09:00'daki Passolig vb.) ASLA seçme!
@@ -4954,6 +4970,30 @@ async function processAssistantInputCore(params: {
   let syncedToGoogle = false;
   let googleSyncError: string | undefined;
 
+  // Guard against background room conversations on open microphone being misclassified as "note" or "calendar"
+  if (isVoice && parsed.intent === "note") {
+    const hasExplicitNoteKeyword =
+      /\b(not\b|notu\b|notunu|gorev\w*|hatirlat\w*|is\s+olarak|listeye|kaydet\w*|yaz\b|ata\w*)\b/.test(
+        normTranscriptForAction
+      );
+    if (!hasExplicitNoteKeyword) {
+      parsed.intent = "help";
+    }
+  }
+  if (isVoice && parsed.intent === "calendar" && action === "create") {
+    const hasExplicitCalKeyword =
+      /\b(toplanti\w*|etkinlik\w*|takvim\w*|randevu\w*|ajanda\w*|planla\w*|ayarla\w*|ekle\w*|gir\b|girip\b|kaydet\w*|davet\w*|saat\b|yarin\b|bugun\b|haftaya\b)\b/.test(
+        normTranscriptForAction
+      );
+    if (
+      !hasExplicitCalKeyword &&
+      !localParsed.hasExplicitTime &&
+      !localParsed.hasExplicitDate
+    ) {
+      parsed.intent = "help";
+    }
+  }
+
   // ==================== 1. CALENDAR (CREATE / UPDATE / DELETE / SHARE) ====================
   if (parsed.intent === "calendar") {
     const calData = parsed.calendar ||
@@ -5772,6 +5812,40 @@ async function processAssistantInputCore(params: {
       driveFiles: driveRes.files,
       selectedDriveFile:
         driveRes.files.length === 1 ? driveRes.files[0] : undefined,
+    };
+  }
+
+  const isConversationalGreeting =
+    /\b(merhaba\w*|selam\w*|alo\w*|efendim|asistan\w*|iyi\s+gunler|gunaydin|iyi\s+aksamlar|nasilsin\w*|duyuyor\s*musun\w*|sesim\s+geliyor\s*mu|orada\s*misin\w*|oradamisin\w*|dinliyor\s*musun\w*|kimsin\w*|yardim\w*|ne\s+yapabilirsin\w*)\b/.test(
+      normTranscriptForAction
+    );
+
+  if (isConversationalGreeting) {
+    return {
+      transcript,
+      intent: "help",
+      action: "share",
+      usedGemini,
+      syncedToGoogle: false,
+      replyText:
+        `👩‍💼 *Canlı Sesli Asistanınız Sizi Dinliyor, Onur Bey!*\n\n` +
+        `_"Evet Onur Bey, sesinizi çok net duyuyorum, sizi dinliyorum. Takvim, rehber, görevler, Google Photos veya Drive için ne yapmamı istersiniz?"_`,
+      spokenReply:
+        "Evet Onur Bey, sesinizi çok net duyuyorum, sizi dinliyorum. Takvim, rehber, görevler, Google Photos veya Drive için ne yapmamı istersiniz?",
+    };
+  }
+
+  // On live voice / audio inputs, ignore ambient room noise or non-command chatter instead of looping help prompts
+  if (isVoice) {
+    return {
+      transcript: "",
+      intent: "help",
+      action: "create",
+      usedGemini,
+      syncedToGoogle: false,
+      duplicate: true,
+      replyText: "",
+      spokenReply: "",
     };
   }
 

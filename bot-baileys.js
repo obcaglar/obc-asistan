@@ -917,7 +917,7 @@ async function startWhatsAppBot() {
         `📞 WhatsApp Sesli Arama Algılandı (${callerJid}, callId=${call.id}) -> Canlı Kadın Sesli Asistan Penceresi Açılıyor!`
       );
 
-      // 1. Signal Local web app immediately so any open tab activates the Live Voice Call UI!
+      // 1. Signal Local AND Cloud web apps immediately so any open tab activates the Live Voice Call UI!
       axios
         .post(
           ASSISTANT_API_URL,
@@ -925,27 +925,67 @@ async function startWhatsAppBot() {
           { timeout: 4000 }
         )
         .catch(() => {});
+      if (VERCEL_API_URL && VERCEL_API_URL !== ASSISTANT_API_URL) {
+        axios
+          .post(
+            VERCEL_API_URL,
+            { action: "incoming_call", callId: call.id, callerJid },
+            { timeout: 4000 }
+          )
+          .catch(() => {});
+      }
 
-      // 2. On Windows desktop, launch the dedicated Chrome Call Window with Autoplay + Auto-Mic unlocked so it speaks out loud and listens immediately!
+      // 2. Send a 1-tap Live Call Card (text only with BOT_INVISIBLE_MARKER, never audio files) so Mobile WhatsApp users can also tap to talk on their phone
+      try {
+        const callMsg =
+          `📞 *Çağrınız Yanıtlandı — Sizi Dinliyorum Onur Bey!*\n\n` +
+          `👩‍💼 _"Buyurun Onur Bey, çağrınızı aldım, sizi dinliyorum. Ne yapmamı istersiniz?"_\n\n` +
+          `🎙️ *Canlı Kadın Sesli Asistanınız mikrofonu açık olarak başlatıldı.* Doğrudan konuşabilir veya cep telefonunuzdan canlı görüşme ekranını açmak için dokunabilirsiniz:\n` +
+          `👉 https://obc-asistan.vercel.app/?call=1&autostart=1${BOT_INVISIBLE_MARKER}`;
+        const sentCallMsg = await sock.sendMessage(callerJid, {
+          text: callMsg,
+        });
+        lastBotReplyTimePerJid.set(callerJid, Date.now());
+        if (sentCallMsg?.key?.id) {
+          sentBotMessageIds.add(sentCallMsg.key.id);
+          processedMessageIds.add(sentCallMsg.key.id);
+        }
+      } catch (err) {
+        console.error("Çağrı kartı gönderim hatası:", err.message);
+      }
+
+      // 3. On Windows desktop, check after 1.5s if an open browser tab already answered the call; if not, launch the dedicated Chrome Call Window!
       if (
         process.platform === "win32" &&
         !process.env.RENDER &&
-        now - lastDesktopBrowserOpenMs > 12000
+        now - lastDesktopBrowserOpenMs > 8000
       ) {
-        lastDesktopBrowserOpenMs = now;
-        try {
-          const chromeExe =
-            "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe";
-          const callProfileDir = path.join(__dirname, ".chrome_call_profile");
-          const callUrl = "http://localhost:3000/?call=1&autostart=1";
-          if (fs.existsSync(chromeExe)) {
-            exec(
-              `"${chromeExe}" --user-data-dir="${callProfileDir}" --autoplay-policy=no-user-gesture-required --use-fake-ui-for-media-stream --window-size=540,820 --app="${callUrl}"`
-            );
-          } else {
-            exec(`start "" "${callUrl}"`);
-          }
-        } catch {}
+        setTimeout(async () => {
+          try {
+            const checkRes = await axios.get(ASSISTANT_API_URL, {
+              timeout: 2000,
+            });
+            // If an open tab already acknowledged and answered the call, activeWhatsAppCall is null
+            if (!checkRes?.data?.activeWhatsAppCall) {
+              return;
+            }
+          } catch {}
+
+          lastDesktopBrowserOpenMs = Date.now();
+          try {
+            const chromeExe =
+              "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe";
+            const callProfileDir = path.join(__dirname, ".chrome_call_profile");
+            const callUrl = "http://localhost:3000/?call=1&autostart=1";
+            if (fs.existsSync(chromeExe)) {
+              exec(
+                `"${chromeExe}" --user-data-dir="${callProfileDir}" --autoplay-policy=no-user-gesture-required --use-fake-ui-for-media-stream --window-size=540,820 --app="${callUrl}"`
+              );
+            } else {
+              exec(`start "" "${callUrl}"`);
+            }
+          } catch {}
+        }, 1500);
       }
     }
   });

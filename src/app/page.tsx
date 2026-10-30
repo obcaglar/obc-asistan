@@ -232,6 +232,19 @@ export default function HomePage() {
     fetch("/api/assistant?live=1")
       .then((r) => r.json())
       .then((data) => {
+        if (
+          typeof window !== "undefined" &&
+          window.location.search.includes("call=1") &&
+          data?.activeWhatsAppCall?.callId
+        ) {
+          const initCallId = data.activeWhatsAppCall.callId;
+          handledCallIdsRef.current.add(initCallId);
+          fetch("/api/assistant", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ action: "ack_call", callId: initCallId }),
+          }).catch(() => {});
+        }
         if (data?.envStatus) {
           setServerEnvStatus(data.envStatus);
         }
@@ -270,24 +283,23 @@ export default function HomePage() {
             !handledCallIdsRef.current.has(data.activeWhatsAppCall.callId)
           ) {
             const incomingId = data.activeWhatsAppCall.callId;
-            handledCallIdsRef.current.add(incomingId);
-            fetch("/api/assistant", {
-              method: "POST",
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({
-                action: "ack_call",
-                callId: incomingId,
-              }),
-            }).catch(() => {});
-
             const isRecentCall =
               !data.activeWhatsAppCall.timestamp ||
-              Date.now() - data.activeWhatsAppCall.timestamp < 15000;
-            const isVisibleTab =
-              typeof document === "undefined" || !document.hidden;
+              Date.now() - data.activeWhatsAppCall.timestamp < 20000;
 
-            // Only open if not already in an active call and this is the visible tab (prevents multi-tab & infinite restart loops!)
-            if (!callActiveRef.current && isRecentCall && isVisibleTab) {
+            if (isRecentCall) {
+              handledCallIdsRef.current.add(incomingId);
+              fetch("/api/assistant", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({
+                  action: "ack_call",
+                  callId: incomingId,
+                }),
+              }).catch(() => {});
+              try {
+                window.focus();
+              } catch {}
               startWhatsAppVoiceCall();
             }
           }
@@ -459,7 +471,9 @@ export default function HomePage() {
       if (
         result.duplicate ||
         !result.replyText ||
-        (params.fromLiveCall && result.intent === "help" && !params.text)
+        (params.fromLiveCall &&
+          result.intent === "help" &&
+          result.action !== "share")
       ) {
         return result;
       }
@@ -665,19 +679,26 @@ export default function HomePage() {
     let doneCalled = false;
     const safetyTimer = setTimeout(() => {
       if (!doneCalled) {
+        if (
+          callAudioRef.current &&
+          !callAudioRef.current.paused &&
+          !callAudioRef.current.ended
+        ) {
+          return;
+        }
         doneCalled = true;
         if (onDone) onDone();
       }
-    }, 6500);
+    }, 18000);
 
     const safeDone = () => {
       if (!doneCalled) {
         doneCalled = true;
         clearTimeout(safetyTimer);
-        // Wait 550ms after speaker audio ends so speaker echo never enters the microphone
+        // Wait 650ms after speaker audio ends so speaker echo never enters the microphone
         setTimeout(() => {
           if (onDone) onDone();
-        }, 550);
+        }, 650);
       }
     };
 
@@ -1056,7 +1077,7 @@ export default function HomePage() {
       !effectiveCommand ||
       result?.duplicate ||
       !result?.replyText ||
-      (!command && result?.intent === "help")
+      (result?.intent === "help" && result?.action !== "share")
     ) {
       callExecutingRef.current = false;
       setCallLiveTranscript("");
