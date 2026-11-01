@@ -173,6 +173,10 @@ export default function HomePage() {
   const [callNeedsAudioTap, setCallNeedsAudioTap] = useState(false);
   const [callMicLevel, setCallMicLevel] = useState(0);
   const [callIsRecordingSpeech, setCallIsRecordingSpeech] = useState(false);
+  const [familyMembersInput, setFamilyMembersInput] = useState(
+    "Çağlar, Esmeray, Esmeray Çağlar"
+  );
+  const [ownerPhoneSetting, setOwnerPhoneSetting] = useState("+905336330011");
   const callActiveRef = useRef<boolean>(false);
   const callHandsFreeRef = useRef<boolean>(true);
   const callTtsRef = useRef<boolean>(true);
@@ -231,7 +235,14 @@ export default function HomePage() {
         const sp = new URLSearchParams(window.location.search);
         const callerParam = sp.get("caller");
         if (callerParam) {
-          callCallerNameRef.current = callerParam.trim();
+          const cleanCaller = callerParam.trim();
+          const isOwnerId =
+            cleanCaller.includes("5336330011") ||
+            cleanCaller.includes("5491007729") ||
+            cleanCaller.includes("94261647257804") ||
+            cleanCaller.toLocaleLowerCase("tr-TR") === "onur bey" ||
+            cleanCaller.toLocaleLowerCase("tr-TR") === "onur baran çağlar";
+          callCallerNameRef.current = isOwnerId ? "" : cleanCaller;
         }
       } catch {}
     }
@@ -282,6 +293,19 @@ export default function HomePage() {
         }
         if (data?.envStatus) {
           setServerEnvStatus(data.envStatus);
+        }
+        if (data?.donnaAccessPolicy) {
+          if (Array.isArray(data.donnaAccessPolicy.familyMembers)) {
+            setFamilyMembersInput(
+              data.donnaAccessPolicy.familyMembers.join(", ")
+            );
+          }
+          if (
+            Array.isArray(data.donnaAccessPolicy.ownerPhones) &&
+            data.donnaAccessPolicy.ownerPhones[0]
+          ) {
+            setOwnerPhoneSetting(data.donnaAccessPolicy.ownerPhones[0]);
+          }
         }
         const source = data?.liveWorkspace || data?.recentWebhookEvents;
         if (source) {
@@ -2208,6 +2232,128 @@ WHATSAPP_VERIFY_TOKEN=${waverify}`;
                 showMobileQuickPanel ? "flex" : "hidden md:flex"
               } w-full md:w-80 lg:w-96 bg-white border-r border-slate-200 flex-col shrink-0 overflow-y-auto custom-scrollbar p-4 space-y-4 max-h-[55vh] md:max-h-none border-b md:border-b-0`}
             >
+              {/* DONNA 3-TIER ACCESS, PRIVACY & MEETING STANDARD SETTINGS CARD */}
+              <div className="p-3 rounded-2xl bg-gradient-to-br from-slate-900 via-slate-800 to-emerald-950 text-white border border-emerald-500/30 shadow-md space-y-2.5">
+                <div className="flex items-center justify-between">
+                  <span className="text-[11px] font-extrabold text-emerald-300 uppercase tracking-wider flex items-center gap-1.5">
+                    <i className="fa-solid fa-shield-halved text-emerald-400"></i>
+                    Donna Erişim &amp; Gizlilik Standardı
+                  </span>
+                  <span className="text-[10px] px-2 py-0.5 rounded-full bg-emerald-500/20 text-emerald-300 border border-emerald-400/30 font-semibold">
+                    Aktif Standart
+                  </span>
+                </div>
+
+                <div className="space-y-1.5 text-[11px]">
+                  <div className="p-2 rounded-xl bg-white/5 border border-white/10">
+                    <div className="font-bold text-emerald-300">
+                      👑 1. Sahip ({ownerPhoneSetting} — Onur Bey)
+                    </div>
+                    <p className="text-slate-300 text-[10px] mt-0.5">
+                      Ajanda/Takvim, İş/Görevler ve Kontak Listesi hakkında
+                      sorulan tüm sorulara tam yanıt + tam yönetim yetkisi.
+                    </p>
+                  </div>
+
+                  <div className="p-2 rounded-xl bg-white/5 border border-white/10">
+                    <div className="font-bold text-amber-300">
+                      👨‍👩‍👧 2. Aile Üyeleri (Sadece Ajanda Saat &amp; Başlık)
+                    </div>
+                    <p className="text-slate-300 text-[10px] mt-0.5">
+                      Sadece ajanda saatleri ve etkinlik başlıklarına yanıt
+                      verilir; görevler ve kontak listesi gizli tutulur.
+                    </p>
+                    <div className="mt-1.5 flex gap-1">
+                      <input
+                        type="text"
+                        value={familyMembersInput}
+                        onChange={(e) => setFamilyMembersInput(e.target.value)}
+                        placeholder="Çağlar, Esmeray..."
+                        className="flex-1 bg-slate-950/70 border border-slate-700 rounded-lg px-2 py-1 text-[10px] text-white focus:outline-none focus:border-emerald-400"
+                      />
+                      <button
+                        type="button"
+                        onClick={() => {
+                          const list = familyMembersInput
+                            .split(",")
+                            .map((s) => s.trim())
+                            .filter(Boolean);
+                          fetch("/api/assistant", {
+                            method: "POST",
+                            headers: { "Content-Type": "application/json" },
+                            body: JSON.stringify({
+                              action: "update_access_policy",
+                              policy: {
+                                ownerPhones: [
+                                  ownerPhoneSetting,
+                                  "+905491007729",
+                                  "94261647257804",
+                                ],
+                                familyMembers: list,
+                              },
+                            }),
+                          })
+                            .then(() =>
+                              showToast(
+                                "✅ Donna erişim ve aile üyeleri ayarları güncellendi!"
+                              )
+                            )
+                            .catch(() => {});
+                        }}
+                        className="px-2 py-1 bg-emerald-600 hover:bg-emerald-500 text-white text-[10px] font-bold rounded-lg cursor-pointer"
+                      >
+                        Kaydet
+                      </button>
+                    </div>
+                  </div>
+
+                  <div className="p-2 rounded-xl bg-white/5 border border-white/10">
+                    <div className="font-bold text-sky-300">
+                      🤝 3. Google Kontakları (Boş Saat &amp; Toplantı Talebi)
+                    </div>
+                    <p className="text-slate-300 text-[10px] mt-0.5">
+                      Mevcut başlıklar gizlenir; sadece{" "}
+                      <strong>boş saatler</strong> söylenir ve{" "}
+                      <strong>
+                        Başlık + İçerik + Katılımcı E-posta Adresleri
+                      </strong>{" "}
+                      alınarak ajandaya toplantı oluşturulur.
+                    </p>
+                  </div>
+                </div>
+
+                {/* Quick 1-Click Query Buttons for Owner */}
+                <div className="pt-1 grid grid-cols-3 gap-1">
+                  <button
+                    type="button"
+                    onClick={() =>
+                      triggerVoiceSample("Yarınki ajandamı söyler misin?")
+                    }
+                    className="px-2 py-1.5 rounded-lg bg-emerald-500/20 hover:bg-emerald-500/30 border border-emerald-400/30 text-[10px] font-bold text-emerald-200 cursor-pointer text-center"
+                  >
+                    📅 Yarınki Ajandam
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() =>
+                      triggerVoiceSample("İş ve görevlerim neler?")
+                    }
+                    className="px-2 py-1.5 rounded-lg bg-amber-500/20 hover:bg-amber-500/30 border border-amber-400/30 text-[10px] font-bold text-amber-200 cursor-pointer text-center"
+                  >
+                    📋 Görevlerim
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() =>
+                      triggerVoiceSample("Kontak listemde kimler var?")
+                    }
+                    className="px-2 py-1.5 rounded-lg bg-sky-500/20 hover:bg-sky-500/30 border border-sky-400/30 text-[10px] font-bold text-sky-200 cursor-pointer text-center"
+                  >
+                    📇 Kontak Listem
+                  </button>
+                </div>
+              </div>
+
               <div>
                 <h2 className="text-xs font-bold text-slate-400 uppercase tracking-wider mb-2 flex items-center justify-between">
                   <span className="flex items-center gap-1.5">

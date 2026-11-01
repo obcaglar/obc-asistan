@@ -12,6 +12,8 @@ import {
   acknowledgeWhatsAppCall,
   terminateWhatsAppCall,
   resolveGoogleAccessToken,
+  getDonnaAccessPolicy,
+  updateDonnaAccessPolicy,
 } from "@/lib/assistant-engine";
 
 // Deduplication cache to prevent duplicate WhatsApp bot replies within 15 seconds
@@ -67,12 +69,19 @@ export async function GET(request: NextRequest) {
     liveWorkspace,
     activeWhatsAppCall: currentCall,
     callTerminatedAt,
+    donnaAccessPolicy: getDonnaAccessPolicy(),
   });
 }
 
 export async function POST(request: NextRequest) {
   try {
     const body = await request.json();
+
+    // 0. Handle Donna Access & Privacy Policy updates from UI Settings
+    if (body.action === "update_access_policy") {
+      const updated = updateDonnaAccessPolicy(body.policy || {});
+      return NextResponse.json({ ok: true, donnaAccessPolicy: updated });
+    }
 
     // 1. Handle incoming WhatsApp voice call signal from bot-baileys.js
     if (body.action === "incoming_call") {

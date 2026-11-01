@@ -27,6 +27,40 @@ const VERCEL_API_URL =
 const TARGET_ASSISTANT_PHONE = (
   process.env.WHATSAPP_ASSISTANT_NUMBER || "+905491007729"
 ).replace(/\D/g, "");
+const OWNER_PERSONAL_PHONE = (
+  process.env.OWNER_PERSONAL_PHONE || "+905336330011"
+).replace(/\D/g, "");
+const OWNER_IDENTIFIERS = [
+  TARGET_ASSISTANT_PHONE,
+  TARGET_ASSISTANT_PHONE.slice(-10),
+  OWNER_PERSONAL_PHONE,
+  OWNER_PERSONAL_PHONE.slice(-10),
+  "905336330011",
+  "5336330011",
+  "905491007729",
+  "5491007729",
+  "94261647257804",
+].filter(Boolean);
+
+function isOwnerJidOrPhone(jid = "", altJid = "", senderName = "") {
+  const combined = `${jid} ${altJid}`.replace(/\D/g, " ");
+  for (const id of OWNER_IDENTIFIERS) {
+    if (id && (jid.includes(id) || altJid.includes(id) || combined.includes(id))) {
+      return true;
+    }
+  }
+  const normName = String(senderName || "").toLocaleLowerCase("tr-TR");
+  if (
+    normName.includes("onur baran") ||
+    normName.includes("obcaglar") ||
+    normName === "onur" ||
+    normName === "onur çağlar" ||
+    normName === "onur caglar"
+  ) {
+    return true;
+  }
+  return false;
+}
 const AUTH_DIR = `auth_info_baileys_${TARGET_ASSISTANT_PHONE}`;
 
 let latestQrHtml = "";
@@ -545,15 +579,23 @@ async function startWhatsAppBot() {
       const altJid = String(
         m.key?.remoteJidAlt || m.key?.participantAlt || m.key?.participant || ""
       );
+      const isOwnerSender = Boolean(
+        m.key?.fromMe || isOwnerJidOrPhone(jid, altJid, senderName)
+      );
       const senderPhone = jid.endsWith("@s.whatsapp.net")
         ? jid.split("@")[0]
         : altJid.endsWith("@s.whatsapp.net")
           ? altJid.split("@")[0]
-          : "";
+          : isOwnerSender
+            ? "905336330011"
+            : "";
       if (senderName || senderPhone) {
         const prevProf = callerProfileByJid.get(jid) || {};
         callerProfileByJid.set(jid, {
-          senderName: senderName || prevProf.senderName || "",
+          senderName:
+            senderName ||
+            prevProf.senderName ||
+            (isOwnerSender ? "Onur Bey" : ""),
           senderPhone: senderPhone || prevProf.senderPhone || "",
         });
       }
@@ -561,10 +603,11 @@ async function startWhatsAppBot() {
       const audioMsg = innerMsg.audioMessage || m.message.audioMessage;
       const lower = trimmedText.toLocaleLowerCase("tr-TR");
       const hasClockTime = /\b([01]?\d|2[0-3])[:.][0-5]\d\b/.test(lower);
-      const isExternalCaller = !m.key?.fromMe;
+      const isDirectIncomingMessage = !m.key?.fromMe;
+      const isExternalCaller = !isOwnerSender;
       const isCommand =
         Boolean(audioMsg) ||
-        (isExternalCaller && trimmedText.length >= 2) ||
+        (isDirectIncomingMessage && trimmedText.length >= 2) ||
         lower.startsWith("!") ||
         hasClockTime ||
         lower.includes("toplantı") ||
@@ -573,14 +616,29 @@ async function startWhatsAppBot() {
         lower.includes("etkinlik") ||
         lower.includes("görev") ||
         lower.includes("gorev") ||
+        lower.includes("işler") ||
+        lower.includes("isler") ||
         lower.includes("görüşme") ||
         lower.includes("gorusme") ||
         lower.includes("takvim") ||
         lower.includes("ajanda") ||
+        lower.includes("program") ||
         lower.includes("rehber") ||
+        lower.includes("kontak") ||
         lower.includes("kişi") ||
         lower.includes("kisi") ||
         lower.includes("numara") ||
+        lower.includes("söyler misin") ||
+        lower.includes("soyler misin") ||
+        lower.includes("söyle") ||
+        lower.includes("soyle") ||
+        lower.includes("ne var") ||
+        lower.includes("neler") ||
+        lower.includes("kimler") ||
+        lower.includes("boş saat") ||
+        lower.includes("bos saat") ||
+        lower.includes("müsait") ||
+        lower.includes("musait") ||
         lower.includes("kaydet") ||
         lower.includes("ekle") ||
         lower.includes("oluştur") ||
@@ -1063,14 +1121,15 @@ async function startWhatsAppBot() {
       const ownLid = sock.user?.lid
         ? sock.user.lid.replace(/:\d+@/, "@")
         : "";
-      const isExternalCall = Boolean(
-        ownJid &&
-          chatJid !== ownJid &&
-          !chatJid.startsWith(TARGET_ASSISTANT_PHONE) &&
-          (!ownLid || chatJid !== ownLid)
+      const isOwnerCall = Boolean(
+        isOwnerJidOrPhone(chatJid, rawCallerJid, knownCaller?.senderName) ||
+          (ownJid && chatJid === ownJid) ||
+          (ownLid && chatJid === ownLid)
       );
-      const callerDisplay =
-        knownCaller?.senderName || (isExternalCall ? `+${callerPhone}` : "Onur Bey");
+      const isExternalCall = !isOwnerCall;
+      const callerDisplay = isExternalCall
+        ? knownCaller?.senderName || `+${callerPhone}`
+        : "Onur Bey";
       const callerQuery = isExternalCall
         ? `&caller=${encodeURIComponent(knownCaller?.senderName || callerPhone)}`
         : "";
@@ -1212,3 +1271,13 @@ if (process.env.RENDER_EXTERNAL_URL) {
     axios.get(process.env.RENDER_EXTERNAL_URL).catch(() => {});
   }, 10 * 60 * 1000);
 }
+
+// Global crash protection so Donna WhatsApp Bot stays alive 24/7
+process.on("uncaughtException", (err) => {
+  console.error("⚠️ [Koruma] Yakalanmayan hata (Bot çalışmaya devam ediyor):", err?.message || err);
+});
+
+process.on("unhandledRejection", (reason) => {
+  console.error("⚠️ [Koruma] İşlenmeyen Promise reddi (Bot çalışmaya devam ediyor):", reason?.message || reason);
+});
+

@@ -93,12 +93,145 @@ export interface AssistantCredentials {
   whatsappPhoneNumberId?: string;
 }
 
-export type ActionType = "create" | "update" | "delete" | "share";
+export type ActionType = "create" | "update" | "delete" | "share" | "query";
+
+export type CallerRole = "owner" | "family" | "contact" | "unknown";
+
+export interface DonnaAccessPolicy {
+  assistantName: string;
+  ownerPhones: string[];
+  familyMembers: string[];
+  workDayStartHour: number;
+  workDayEndHour: number;
+  ownerFullQueryAccess: boolean;
+  familyAgendaTitlesOnly: boolean;
+  contactsFreeSlotsMeetingFlow: boolean;
+}
+
+const ACCESS_POLICY_FILE = path.join(process.cwd(), ".donna_access_policy.json");
+
+const DEFAULT_DONNA_ACCESS_POLICY: DonnaAccessPolicy = {
+  assistantName: "Donna",
+  ownerPhones: ["+905336330011", "+905491007729", "94261647257804"],
+  familyMembers: ["Esmeray Çağlar", "Esmeray", "Çağlar", "Aile"],
+  workDayStartHour: 9,
+  workDayEndHour: 18,
+  ownerFullQueryAccess: true,
+  familyAgendaTitlesOnly: true,
+  contactsFreeSlotsMeetingFlow: true,
+};
+
+let currentDonnaAccessPolicy: DonnaAccessPolicy = {
+  ...DEFAULT_DONNA_ACCESS_POLICY,
+};
+
+try {
+  if (fs.existsSync(ACCESS_POLICY_FILE)) {
+    const raw = JSON.parse(fs.readFileSync(ACCESS_POLICY_FILE, "utf-8"));
+    currentDonnaAccessPolicy = {
+      ...DEFAULT_DONNA_ACCESS_POLICY,
+      ...raw,
+      ownerPhones: Array.from(
+        new Set([
+          ...DEFAULT_DONNA_ACCESS_POLICY.ownerPhones,
+          ...(Array.isArray(raw.ownerPhones) ? raw.ownerPhones : []),
+        ])
+      ),
+    };
+  }
+} catch {
+  // Ignore on read-only filesystems
+}
+
+export function getDonnaAccessPolicy(): DonnaAccessPolicy {
+  return currentDonnaAccessPolicy;
+}
+
+export function updateDonnaAccessPolicy(
+  partial: Partial<DonnaAccessPolicy>
+): DonnaAccessPolicy {
+  currentDonnaAccessPolicy = {
+    ...currentDonnaAccessPolicy,
+    ...partial,
+    ownerPhones: Array.from(
+      new Set([
+        "+905336330011",
+        "+905491007729",
+        "94261647257804",
+        ...(partial.ownerPhones || currentDonnaAccessPolicy.ownerPhones),
+      ])
+    ),
+  };
+  try {
+    fs.writeFileSync(
+      ACCESS_POLICY_FILE,
+      JSON.stringify(currentDonnaAccessPolicy, null, 2),
+      "utf-8"
+    );
+  } catch {
+    // Ignore on read-only filesystems
+  }
+  return currentDonnaAccessPolicy;
+}
+
+export function isWorkspaceQueryOrQuestion(rawText?: string): boolean {
+  if (!rawText) return false;
+  const norm = rawText
+    .toLocaleLowerCase("tr-TR")
+    .replace(/ç/g, "c")
+    .replace(/ğ/g, "g")
+    .replace(/ı/g, "i")
+    .replace(/ö/g, "o")
+    .replace(/ş/g, "s")
+    .replace(/ü/g, "u")
+    .replace(/[^a-z0-9\s?]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+  if (!norm) return false;
+
+  // If the sentence contains an explicit creation, deletion, or update command verb, it is NOT a read-only query
+  const hasExplicitMutationVerb =
+    /\b(?:ekle\w*|olustur\w*|planla\w*|ayarla\w*|kaydet\w*|ac\b|acip\b|acalim\b|acmani\b|gir\b|girip\b|girer\s*misin\w*|girermisin\w*|yaz\w*|dus\w*|birak\w*|ata\b|atayalim\b|sil\w*|iptal\w*|kaldir\w*|cikar\w*|guncelle\w*|degistir\w*|duzenle\w*|ertele\w*|one\s*cek\w*|ileri\w*\s*al\w*)\b/.test(
+      norm
+    );
+  if (hasExplicitMutationVerb) return false;
+
+  // Explicit question / read / list expressions
+  if (
+    /\b(?:soyler\s*misin\w*|soylermisin\w*|soyle\w*|nedir\b|neler\w*|ne\s+var\b|neler\s+var\b|kim\s+var\b|kimler\s+var\b|var\s+mi\b|musait\s*mi\w*|musaitlik\w*|bos\s+mu\b|bos\s+saat\w*|bosluk\w*|kacta\b|ne\s+zaman\b|listele\w*|oku\w*|goster\w*|bak\b|bakalim\b|kontrol\s+et\w*|bilgi\s+ver\w*|ozetle\w*|nasil\s+gorunuyor|programim\s+ne\w*|ajandam\s+ne\w*|takvimim\s+ne\w*|numarasi\s+ne\w*|numarasi\s+kac\w*|telefonu\s+ne\w*|telefonu\s+kac\w*|maili\s+ne\w*|epostasi\s+ne\w*|e\s*postasi\s+ne\w*|adresi\s+ne\w*|hakkinda\b|kimdir\b|hangi\s+toplanti\w*|hangi\s+etkinlik\w*|hangi\s+gorev\w*|bekleyen\s+is\w*|bekleyen\s+gorev\w*)\b/.test(
+      norm
+    )
+  ) {
+    return true;
+  }
+
+  // Short noun-only or question-mark queries about agenda/calendar/tasks/contacts without a mutation verb
+  if (
+    norm.includes("?") &&
+    /\b(?:ajanda\w*|takvim\w*|toplanti\w*|etkinlik\w*|randevu\w*|gorev\w*|is\w*|not\w*|rehber\w*|kontak\w*|kisi\w*)\b/.test(
+      norm
+    )
+  ) {
+    return true;
+  }
+
+  if (
+    norm.split(/\s+/).length <= 5 &&
+    /\b(?:yarinki\s+ajanda\w*|bugunku\s+ajanda\w*|yarinki\s+takvim\w*|bugunku\s+takvim\w*|yarinki\s+program\w*|bugunku\s+program\w*|gorevlerim|islerim|kontak\s+listem|rehberim)\b/.test(
+      norm
+    )
+  ) {
+    return true;
+  }
+
+  return false;
+}
 
 export interface AssistantProcessResult {
   transcript: string;
   intent: "calendar" | "contact" | "note" | "photos" | "drive" | "help";
   action?: ActionType;
+  callerRole?: CallerRole;
   targetQuery?: string;
   replyText: string;
   usedGemini: boolean;
@@ -1028,13 +1161,22 @@ export function parseCommandLocally(
         lower
       ));
 
+  const isQuery =
+    !isDelete &&
+    !isUpdate &&
+    !isShare &&
+    !hasCreateVerb &&
+    isWorkspaceQueryOrQuestion(text);
+
   const action: ActionType = isDelete
     ? "delete"
     : isShare
       ? "share"
       : isUpdate
         ? "update"
-        : "create";
+        : isQuery
+          ? "query"
+          : "create";
 
   // 0. NUMBERED OPTION SELECTION FOR DRIVE & PHOTOS ("5 numarayı paylaş", "!drive 5 numaralı dosyayı paylaş", "2. seçeneği gönder", "3 numaralı fotoğrafı paylaş")
   const strippedForOption = text
@@ -1066,9 +1208,19 @@ export function parseCommandLocally(
   }
 
   // 1. CONTACTS / GOOGLE PEOPLE
+  const isContactQuery =
+    isQuery &&
+    !/\b(ajanda\w*|takvim\w*|toplant[ıi]\w*|etkinli[kğ]\w*|randevu\w*)\b/i.test(
+      lower
+    ) &&
+    /\b(rehber\w*|kontak\w*|kisi\s+list\w*|kişi\s+list\w*|numaras[ıi]\w*|telefonu\b|mail\s*adresi\w*|maili\b|e-?postas[ıi]\w*|kimdir\b)\b/i.test(
+      lower
+    );
+
   if (
     !isShare &&
-    (lower.startsWith("!rehber") ||
+    (isContactQuery ||
+      lower.startsWith("!rehber") ||
       lower.startsWith("!kisi") ||
       lower.startsWith("!kişi") ||
       lower.includes("rehbere") ||
@@ -1116,7 +1268,7 @@ export function parseCommandLocally(
       .replace(/(?:şirket|firma|kurum):?\s*([^,]+)$/i, "")
       .replace(/["'“”«»]/g, " ")
       .replace(
-        /\b(sil|kaldır|kaldir|güncelle|guncelle|değiştir|degistir|olarak|yeni|numarasını|numarasi|kişisini|kisisini|kişiyi|kisiyi|rehberden|rehberde|rehbere|ekle|kaydet|telefon|tel|numara|numarası|şirket|firma|mail|e-posta|eposta|ad|soyad|isim|lütfen|lutfen):?/gi,
+        /\b(sil|kaldır|kaldir|güncelle|guncelle|değiştir|degistir|olarak|yeni|numarasını|numarasi|kişisini|kisisini|kişiyi|kisiyi|rehberden|rehberde|rehbere|rehberimde|rehberimdeki|kontak|kontaklarım|kontaklarımda|listem|listemde|listesini|ekle|kaydet|telefon|telefonu|tel|numara|numarası|şirket|firma|mail|maili|e-posta|eposta|e-postası|epostası|adresi|ad|soyad|isim|nedir|neler|kim|kimler|var|kaç|kac|söyler|soyler|misin|mısın|söyle|soyle|listele|göster|goster|lütfen|lutfen|donna|dona):?/gi,
         ""
       )
       .replace(/['’][a-zçğıöşü]+/gi, "")
@@ -1125,7 +1277,7 @@ export function parseCommandLocally(
       .trim();
 
     if (!name || name.length < 2) {
-      name = "Yeni Kişi";
+      name = isContactQuery ? "" : "Yeni Kişi";
     }
 
     return {
@@ -1133,7 +1285,7 @@ export function parseCommandLocally(
       action,
       targetQuery: name,
       contact: {
-        name,
+        name: name || "Kişi Listesi",
         phone: phone || "+90 530 000 0000",
         email,
         company: company || "WhatsApp Bağlantısı",
@@ -1144,10 +1296,16 @@ export function parseCommandLocally(
     };
   }
 
-  // 2. CALENDAR / MEETING / TASK (CREATE, UPDATE, DELETE, SHARE/SEND)
+  // 2. CALENDAR / MEETING / TASK (CREATE, UPDATE, DELETE, SHARE/SEND, QUERY)
   const parsedDateInfo = parseDateAndTimeFromTurkishText(text);
   const hasAgendaOrCalendarWord =
-    /\b(ajanda\w*|takvim\w*|toplant[ıi]\w*|etkinli[kğ]\w*|randevu\w*|g[öo]r[üu][şs]me\w*)\b/i.test(
+    /\b(ajanda\w*|takvim\w*|program\w*|toplant[ıi]\w*|etkinli[kğ]\w*|randevu\w*|g[öo]r[üu][şs]me\w*|boş\s*saat\w*|bos\s*saat\w*|müsait\w*|musait\w*)\b/i.test(
+      lower
+    );
+  const isTaskOrNoteQuery =
+    isQuery &&
+    !hasAgendaOrCalendarWord &&
+    /\b(işler\w*|isler\w*|görevler\w*|gorevler\w*|bekleyen\s+iş\w*|bekleyen\s+is\w*|bekleyen\s+görev\w*|bekleyen\s+gorev\w*|notlar\w*|görev\s+list\w*|gorev\s+list\w*|iş\s+list\w*|is\s+list\w*|yapılacak\w*|yapilacak\w*)\b/i.test(
       lower
     );
   const hasNoteCreationPhrase =
@@ -1163,6 +1321,7 @@ export function parseCommandLocally(
     lower.includes("görev olarak ata") ||
     lower.includes("gorev olarak ata");
   const isExplicitNote =
+    isTaskOrNoteQuery ||
     lower.startsWith("!not") ||
     lower.startsWith("!iş") ||
     lower.startsWith("!is") ||
@@ -1205,7 +1364,8 @@ export function parseCommandLocally(
     !isExplicitNote &&
     !isExplicitPhotos &&
     !isExplicitDrive &&
-    (lower.startsWith("!toplanti") ||
+    (hasAgendaOrCalendarWord ||
+      lower.startsWith("!toplanti") ||
       lower.startsWith("!toplantı") ||
       lower.startsWith("!randevu") ||
       lower.startsWith("!gorev") ||
@@ -1429,7 +1589,7 @@ export function parseCommandLocally(
 
     return {
       intent: "note",
-      action: "create",
+      action: isTaskOrNoteQuery ? "query" : action,
       recipientEmail: recipientEmail || undefined,
       recipientQuery: recipientQuery || undefined,
       note: {
@@ -1577,8 +1737,8 @@ Kullanıcının gönderdiği metni veya Türkçe ses kaydını (Voice Message) �
 {
   "transcript": "Ses kaydının veya yazılı mesajın tam ve doğru Türkçe metni (Örn: saatleri 08:30, 16:00 veya 14:30, telefonları 05321112233 biçiminde yaz)",
   "intent": "calendar" | "contact" | "note" | "photos" | "drive" | "help",
-  "action": "create" | "update" | "delete" | "share",
-  "targetQuery": "Silme/güncelleme ise hedef etkinliğin adı; 'photos' ise aranan kişi/aile üyesi/mekan/tarih/albüm adı (Örn: 'Esmeray', 'Yusuf', 'Altınoluk', '2025 Yaz', '29 Ekim'); 'drive' ise aranan dosya/belge/konu adı (Örn: 'Bütçe', 'Okul', 'Kredi', 'Sözleşme', '1')",
+  "action": "create" | "update" | "delete" | "share" | "query",
+  "targetQuery": "Silme/güncelleme ise hedef etkinliğin adı; 'query' (sorgu) ise sorulan kişinin/etkinliğin/görevin adı; 'photos' ise aranan kişi/aile üyesi/mekan/tarih/albüm adı (Örn: 'Esmeray', 'Yusuf', 'Altınoluk', '2025 Yaz', '29 Ekim'); 'drive' ise aranan dosya/belge/konu adı (Örn: 'Bütçe', 'Okul', 'Kredi', 'Sözleşme', '1')",
   "recipientEmail": "Kullanıcı mesajda AÇIKÇA bir e-posta adresi söylediyse yaz (Örn: 'ali@gmail.com'); sadece 'Esmeray'ın gmail hesabına gönder' dediyse ASLA e-posta tahmini yapma, BOŞ STRING ('') bırak!",
   "recipientQuery": "Etkinlik, görev, fotoğraf veya Drive dosyası bir kişiye gönderilecekse/davet edilecekse SADECE o kişinin adı (Örn: 'eşim Esmeray'ın gmail hesabına gönder' -> 'Esmeray', 'Ahmet Yılmaz'a gönder' -> 'Ahmet Yılmaz'), yoksa boş string",
   "calendar": {
@@ -1604,8 +1764,9 @@ Kullanıcının gönderdiği metni veya Türkçe ses kaydını (Voice Message) �
   }
 }
 Kurallar:
-0. ARKA PLAN KONUŞMASI VE ORTAM SESİ FİLTRESİ (ÇOK ÖNEMLİ):
+0. ARKA PLAN KONUŞMASI, SORGU ("query") VE ORTAM SESİ FİLTRESİ (ÇOK ÖNEMLİ):
    - Sadece asistana yönelik hiçbir komut içermeyen anlamsız ortam gürültüsü veya ilgisiz televizyon sesi varsa "intent": "help" döndür.
+   - EĞER KULLANICI YENİ BİR KAYIT EKLEMEK YERİNE SORU SORUYORSA (Örn: "yarınki ajandamı söyler misin", "bugün takvimimde ne var", "saat kaçta boşum", "görevlerim neler", "bekleyen işlerimi söyle", "kontak listemde kimler var", "Ahmet'in numarası kaç"), "action": "query" seç! ASLA "create" yapıp "Söyler misin" gibi sahte etkinlik oluşturma!
    - ANCAK ses kaydında veya mesajda "toplantı", "etkinlik", "randevu", "takvim", "ajanda", "görüşme", "not", "hatırlat", "görev", "ekle", "oluştur", "aç", "planla", "ayarla", "kaydet", "yaz", "sil", "güncelle" VEYA bir saat/tarih (Örn: "14:00'e ...", "yarın saat 3'te ...") geçiyorsa KESİNLİKLE "calendar" veya "note" olarak işle, ASLA "help" döndürme!
 1. YENİ ETKİNLİK EKLEYİP BİR KİŞİYE GÖNDERME ("create" + katılımcı daveti) KESİN KURALI:
    - Eğer kullanıcı YENİ bir etkinlik/görev girilmesini ve aynı zamanda bir kişiye/e-postaya gönderilmesini istiyorsa (Örn: "Sabah 08:30'a kahvaltı ve okula gidiş etkinliği girip eşim Esmeray'ın gmail hesabına gönder", "Yarın 14:00'e toplantı ekleyip Ali'ye gönder"), "action" KESİNLİKLE "create" olmalıdır!
@@ -2160,6 +2321,7 @@ async function createGoogleCalendarEvent(
     attendee: string;
     attendeeEmail?: string;
     location: string;
+    description?: string;
   },
   recipientQuery?: string
 ): Promise<{
@@ -2257,7 +2419,9 @@ async function createGoogleCalendarEvent(
         body: JSON.stringify({
           summary: evt.title,
           location: evt.location,
-          description: `Katılımcı: ${resolvedContactName || evt.attendee}\nWhatsApp ⇄ Google Workspace Asistanı üzerinden oluşturuldu.`,
+          description: evt.description
+            ? `${evt.description}\nKatılımcı: ${resolvedContactName || evt.attendee}\nDonna (OBC Asistan) üzerinden oluşturuldu.`
+            : `Katılımcı: ${resolvedContactName || evt.attendee}\nWhatsApp ⇄ Google Workspace Asistanı üzerinden oluşturuldu.`,
           start: {
             dateTime: startDateTime,
             timeZone: "Europe/Istanbul",
@@ -5004,6 +5168,7 @@ function formatSpokenTurkishDate(isoDate?: string): string {
 
 export function buildNaturalSpokenReply(res: AssistantProcessResult): string {
   if (res.duplicate || !res.replyText) return "";
+  if (res.spokenReply) return res.spokenReply;
 
   if (res.chainedCount && res.chainedCount > 1) {
     return `Tamamdır Onur Bey, peş peşe söylediğiniz ${res.chainedCount} komutu da sırasıyla yerine getirdim. Başka bir isteğiniz var mı?`;
@@ -5075,12 +5240,43 @@ export function buildNaturalSpokenReply(res: AssistantProcessResult): string {
   return "Buyurun Onur Bey, sizi dinliyorum. Takvim, rehber, görev, Google Photos veya Drive için ne yapmamı istersiniz?";
 }
 
+function isFamilyMemberMatch(
+  displayName: string,
+  phone: string,
+  extraMeta = ""
+): boolean {
+  const policy = getDonnaAccessPolicy();
+  const normAll = normalizeTr(`${displayName} ${phone} ${extraMeta}`);
+  const digits = phone.replace(/\D/g, "");
+  const last10 = digits.length >= 10 ? digits.slice(-10) : digits;
+
+  // Built-in family surname / relationship keywords ("Çağlar", "Esmeray", "Aile", "Eşim", "Annem", "Babam", "Kardeşim", "Oğlum", "Kızım")
+  if (
+    /\b(?:caglar|esmeray|aile\w*|esim|karim|annem|babam|kardesim|oglum|kizim|ablam|agabeyim)\b/.test(
+      normAll
+    )
+  ) {
+    return true;
+  }
+
+  for (const fam of policy.familyMembers) {
+    const nFam = normalizeTr(fam);
+    const famDigits = fam.replace(/\D/g, "");
+    const famLast10 = famDigits.length >= 10 ? famDigits.slice(-10) : famDigits;
+    if (famLast10 && last10 && famLast10 === last10) return true;
+    if (nFam && nFam.length >= 3 && normAll.includes(nFam)) return true;
+  }
+  return false;
+}
+
 async function resolveCallerContactFromGoogle(
   accessToken: string | null,
   senderName?: string,
   senderPhone?: string,
-  transcript?: string
+  transcript?: string,
+  isExternalCallerFlag?: boolean
 ): Promise<{
+  callerRole: CallerRole;
   isExternalFriend: boolean;
   inGoogleContacts: boolean;
   displayName: string;
@@ -5088,10 +5284,14 @@ async function resolveCallerContactFromGoogle(
   email?: string;
   attributionLabel?: string;
 }> {
+  const policy = getDonnaAccessPolicy();
   const rawName = (senderName || "").trim();
   const rawPhoneDigits = (senderPhone || "").replace(/\D/g, "");
   const last10Digits =
     rawPhoneDigits.length >= 10 ? rawPhoneDigits.slice(-10) : rawPhoneDigits;
+  const nameDigits = rawName.replace(/\D/g, "");
+  const nameLast10 =
+    nameDigits.length >= 10 ? nameDigits.slice(-10) : nameDigits;
 
   // Check if the caller introduced themselves in the text ("Ben Ahmet Yılmaz, ...", "Merhaba ben Esmeray ...")
   let introName = "";
@@ -5107,43 +5307,67 @@ async function resolveCallerContactFromGoogle(
   const candidateName = introName || rawName;
   const normCandidate = normalizeTr(candidateName);
 
-  // If the caller is Onur Bey himself (or assistant number 5491007729), no external friend attribution needed
+  // Check if caller phone or ID matches Owner Onur Bey (+905336330011, +905491007729, or LID 94261647257804)
+  const ownerDigitList = policy.ownerPhones.map((p) => p.replace(/\D/g, ""));
+  const matchesOwnerPhone = ownerDigitList.some((od) => {
+    if (!od) return false;
+    const odLast10 = od.length >= 10 ? od.slice(-10) : od;
+    return (
+      (rawPhoneDigits &&
+        (rawPhoneDigits === od || last10Digits === odLast10)) ||
+      (nameDigits && (nameDigits === od || nameLast10 === odLast10))
+    );
+  });
+
   const isOwnerName =
     !normCandidate ||
-    /\b(onur\s+baran|onur\s+caglar|dr\s+onur|obc\s*asistan)\b/.test(normCandidate) ||
+    /\b(onur\s+baran|onur\s+caglar|dr\s+onur|obc\s*asistan)\b/.test(
+      normCandidate
+    ) ||
     normCandidate === "onur" ||
-    normCandidate === "siz";
-  const isOwnerPhone =
-    !last10Digits || last10Digits === "5491007729";
+    normCandidate === "siz" ||
+    matchesOwnerPhone;
 
-  if (isOwnerName && isOwnerPhone && !introName) {
+  if (
+    !introName &&
+    (matchesOwnerPhone || (!isExternalCallerFlag && isOwnerName && !last10Digits))
+  ) {
     return {
+      callerRole: "owner",
       isExternalFriend: false,
       inGoogleContacts: false,
       displayName: "Onur Bey",
+      phone: "+905336330011",
     };
   }
 
   if (accessToken) {
     const queries = [candidateName, last10Digits].filter(
-      (q) => q && q.length >= 2
+      (q) => q && q.length >= 2 && !/^\d{12,}$/.test(q)
     );
     for (const q of queries) {
       const matches = await findAllMatchingGooglePersonContacts(accessToken, q);
       if (matches.length > 0) {
         const p = matches[0];
         const foundName = String(
-          p.names?.[0]?.displayName || candidateName || "Rehberdeki Arkadaşınız"
+          p.names?.[0]?.displayName || candidateName || "Rehberdeki Kişi"
         ).trim();
-        const foundPhone = String(p.phoneNumbers?.[0]?.value || senderPhone || "").trim();
+        const foundPhone = String(
+          p.phoneNumbers?.[0]?.value || senderPhone || ""
+        ).trim();
         const foundEmail = String(p.emailAddresses?.[0]?.value || "").trim();
+        const foundOrg = String(p.organizations?.[0]?.name || "").trim();
+        const isFamily = isFamilyMemberMatch(foundName, foundPhone, foundOrg);
         return {
+          callerRole: isFamily ? "family" : "contact",
           isExternalFriend: true,
           inGoogleContacts: true,
           displayName: foundName,
           phone: foundPhone || undefined,
           email: foundEmail || undefined,
-          attributionLabel: `${foundName} (Google Rehber ✅)`,
+          attributionLabel: isFamily
+            ? `${foundName} (Aile Üyesi 👨‍👩‍👧‍👦)`
+            : `${foundName} (Google Rehber ✅)`,
         };
       }
     }
@@ -5156,19 +5380,832 @@ async function resolveCallerContactFromGoogle(
         ? `+90${last10Digits}`
         : "";
   if (fallbackName) {
+    const isFamily = isFamilyMemberMatch(fallbackName, senderPhone || "");
     return {
+      callerRole: isFamily ? "family" : "contact",
       isExternalFriend: true,
-      inGoogleContacts: false,
+      inGoogleContacts: isFamily,
       displayName: fallbackName,
       phone: senderPhone,
-      attributionLabel: `${fallbackName} (WhatsApp)`,
+      attributionLabel: isFamily
+        ? `${fallbackName} (Aile Üyesi 👨‍👩‍👧‍👦)`
+        : `${fallbackName} (WhatsApp)`,
     };
   }
 
   return {
+    callerRole: "owner",
     isExternalFriend: false,
     inGoogleContacts: false,
     displayName: "Onur Bey",
+    phone: "+905336330011",
+  };
+}
+
+interface PendingMeetingRequest {
+  title?: string;
+  content?: string;
+  emails: string[];
+  date: string;
+  startTime?: string;
+  endTime?: string;
+  hasExplicitTime: boolean;
+  updatedAt: number;
+}
+
+const pendingMeetingRequestsByCaller = new Map<string, PendingMeetingRequest>();
+
+async function fetchDayCalendarEventsAndFreeSlots(
+  accessToken: string | null,
+  dateIso: string
+): Promise<{
+  events: Array<{
+    id: string;
+    title: string;
+    date: string;
+    startTime: string;
+    endTime: string;
+    attendee: string;
+    location: string;
+    description: string;
+    htmlLink?: string;
+  }>;
+  freeSlots: string[];
+  isSlotBusy: (startHm: string, endHm: string) => boolean;
+}> {
+  const policy = getDonnaAccessPolicy();
+  const startWorkMin = (policy.workDayStartHour || 9) * 60;
+  const endWorkMin = (policy.workDayEndHour || 18) * 60;
+  const events: Array<{
+    id: string;
+    title: string;
+    date: string;
+    startTime: string;
+    endTime: string;
+    attendee: string;
+    location: string;
+    description: string;
+    htmlLink?: string;
+  }> = [];
+
+  if (accessToken) {
+    try {
+      const dayMin = `${dateIso}T00:00:00+03:00`;
+      const dayMax = `${dateIso}T23:59:59+03:00`;
+      const url = `https://www.googleapis.com/calendar/v3/calendars/primary/events?timeMin=${encodeURIComponent(
+        dayMin
+      )}&timeMax=${encodeURIComponent(
+        dayMax
+      )}&singleEvents=true&orderBy=startTime&maxResults=50`;
+      const res = await fetch(url, {
+        cache: "no-store",
+        headers: { Authorization: `Bearer ${accessToken}` },
+      });
+      if (res.ok) {
+        const data = await res.json();
+        const items = Array.isArray(data.items) ? data.items : [];
+        for (const it of items) {
+          if (!it || it.status === "cancelled") continue;
+          const rawStart = String(it.start?.dateTime || it.start?.date || "");
+          const rawEnd = String(it.end?.dateTime || it.end?.date || "");
+          const startHm = rawStart.includes("T")
+            ? rawStart.slice(11, 16)
+            : "09:00";
+          const endHm = rawEnd.includes("T") ? rawEnd.slice(11, 16) : "18:00";
+          const title = String(it.summary || "Etkinlik").trim();
+          // Skip accidental query-echo titles if any exist
+          if (/^(?:s[öo]yler\s*misin|planlanan\s+etkinlik)$/i.test(title)) {
+            continue;
+          }
+          events.push({
+            id: String(it.id || "evt-" + Math.random()),
+            title,
+            date: rawStart.slice(0, 10) || dateIso,
+            startTime: startHm,
+            endTime: endHm,
+            attendee:
+              it.attendees?.map((a: { email?: string }) => a.email).filter(Boolean).join(", ") ||
+              it.organizer?.email ||
+              "Onur Bey",
+            location: String(it.location || "Google Takvim"),
+            description: String(it.description || ""),
+            htmlLink: it.htmlLink,
+          });
+        }
+      }
+    } catch {
+      // Ignore network error
+    }
+  }
+
+  const toMins = (hm: string) => {
+    const [h, m] = hm.split(":").map((n) => parseInt(n, 10) || 0);
+    return h * 60 + m;
+  };
+  const fmtHm = (mins: number) => {
+    const h = Math.floor(mins / 60);
+    const m = mins % 60;
+    return `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}`;
+  };
+
+  const busyIntervals = events
+    .map((ev) => ({
+      s: Math.max(startWorkMin, toMins(ev.startTime)),
+      e: Math.min(endWorkMin, toMins(ev.endTime)),
+    }))
+    .filter((iv) => iv.e > iv.s)
+    .sort((a, b) => a.s - b.s);
+
+  const mergedBusy: Array<{ s: number; e: number }> = [];
+  for (const iv of busyIntervals) {
+    if (mergedBusy.length === 0 || iv.s > mergedBusy[mergedBusy.length - 1].e) {
+      mergedBusy.push({ ...iv });
+    } else {
+      mergedBusy[mergedBusy.length - 1].e = Math.max(
+        mergedBusy[mergedBusy.length - 1].e,
+        iv.e
+      );
+    }
+  }
+
+  const freeSlots: string[] = [];
+  let cursor = startWorkMin;
+  for (const b of mergedBusy) {
+    if (b.s - cursor >= 30) {
+      freeSlots.push(`${fmtHm(cursor)} - ${fmtHm(b.s)}`);
+    }
+    cursor = Math.max(cursor, b.e);
+  }
+  if (endWorkMin - cursor >= 30) {
+    freeSlots.push(`${fmtHm(cursor)} - ${fmtHm(endWorkMin)}`);
+  }
+
+  const isSlotBusy = (startHm: string, endHm: string) => {
+    const reqS = toMins(startHm);
+    const reqE = Math.max(reqS + 30, toMins(endHm));
+    return events.some((ev) => {
+      const evS = toMins(ev.startTime);
+      const evE = toMins(ev.endTime);
+      return reqS < evE && reqE > evS;
+    });
+  };
+
+  return { events, freeSlots, isSlotBusy };
+}
+
+async function handleCalendarQueryByRole(params: {
+  accessToken: string | null;
+  dateIso: string;
+  callerContact: {
+    callerRole: CallerRole;
+    displayName: string;
+    email?: string;
+    attributionLabel?: string;
+  };
+  transcript: string;
+  isVoice: boolean;
+  usedGemini: boolean;
+}): Promise<AssistantProcessResult> {
+  const { accessToken, dateIso, callerContact, transcript, isVoice, usedGemini } =
+    params;
+  const spokenDate = formatSpokenTurkishDate(dateIso);
+  const { events, freeSlots } = await fetchDayCalendarEventsAndFreeSlots(
+    accessToken,
+    dateIso
+  );
+  const freeText =
+    freeSlots.length > 0
+      ? freeSlots.join(", ")
+      : "09:00 - 18:00 mesai saatleri içinde boş aralık bulunmuyor";
+
+  // 1. OWNER (+905336330011 - Dr. Onur Baran Çağlar): Full agenda details
+  if (callerContact.callerRole === "owner") {
+    if (events.length === 0) {
+      const spoken = `Onur Bey, ${spokenDate} (${dateIso}) günü için ajandanızda kayıtlı bir etkinlik görünmüyor. Tüm gününüz müsait.`;
+      const replyText =
+        (isVoice ? `🎙️ *Sesli Sorgu:* _"${transcript}"_\n\n` : "") +
+        `📅 *Ajanda & Takvim Özeti (${dateIso} — ${spokenDate})*\n\n` +
+        `✨ Bu tarihte kayıtlı bir etkinliğiniz bulunmuyor, tüm gününüz (**09:00 - 18:00**) müsait Onur Bey.`;
+      return {
+        transcript,
+        intent: "calendar",
+        action: "query",
+        callerRole: "owner",
+        replyText,
+        spokenReply: spoken,
+        usedGemini,
+        syncedToGoogle: true,
+      };
+    }
+
+    const lines = events.map(
+      (ev, i) =>
+        `${i + 1}. 🕒 *${ev.startTime} - ${ev.endTime}* — 📌 *${ev.title}*` +
+        (ev.attendee && ev.attendee !== "Onur Bey"
+          ? ` _(👥 ${ev.attendee})_`
+          : "") +
+        (ev.location && ev.location !== "Google Takvim"
+          ? ` | 📍 ${ev.location}`
+          : "")
+    );
+    const spokenItems = events
+      .slice(0, 6)
+      .map((ev) => `saat ${ev.startTime} ile ${ev.endTime} arası ${ev.title}`)
+      .join(", ");
+    const spoken = `Onur Bey, ${spokenDate} ajandanızda toplam ${events.length} etkinlik bulunuyor: ${spokenItems}. Müsait boş saatleriniz ise: ${freeText}.`;
+    const replyText =
+      (isVoice ? `🎙️ *Sesli Sorgu:* _"${transcript}"_\n\n` : "") +
+      `📅 *Ajanda & Takvim Özeti (${dateIso} — ${spokenDate})*\n\n` +
+      `${lines.join("\n")}\n\n` +
+      `🟢 *Boş / Müsait Saatleriniz:* ${freeText}`;
+
+    return {
+      transcript,
+      intent: "calendar",
+      action: "query",
+      callerRole: "owner",
+      replyText,
+      spokenReply: spoken,
+      usedGemini,
+      syncedToGoogle: true,
+    };
+  }
+
+  // 2. FAMILY MEMBERS (Aile Üyeleri): Only schedule hours and event titles
+  if (callerContact.callerRole === "family") {
+    if (events.length === 0) {
+      const spoken = `Merhaba ${callerContact.displayName}, ben Onur Bey'in asistanı Donna. Onur Bey'in ${spokenDate} tarihli ajandasında kayıtlı bir etkinlik bulunmuyor, gün boyu müsaittir.`;
+      const replyText =
+        `👩‍💼 *Donna — Aile Üyesi Ajanda Bilgilendirmesi (${dateIso})*\n\n` +
+        `✨ Onur Bey'in *${dateIso}* tarihli ajandasında kayıtlı bir etkinlik bulunmuyor, gün boyu müsaittir.`;
+      return {
+        transcript,
+        intent: "calendar",
+        action: "query",
+        callerRole: "family",
+        replyText,
+        spokenReply: spoken,
+        usedGemini,
+        syncedToGoogle: true,
+      };
+    }
+
+    const familyLines = events.map(
+      (ev, i) =>
+        `${i + 1}. 🕒 *${ev.startTime} - ${ev.endTime}* — 📌 *${ev.title}*`
+    );
+    const spokenFamily = events
+      .slice(0, 6)
+      .map((ev) => `saat ${ev.startTime} - ${ev.endTime} arası ${ev.title}`)
+      .join(", ");
+    const spoken = `Merhaba ${callerContact.displayName}, ben Onur Bey'in asistanı Donna. Onur Bey'in ${spokenDate} ajandasındaki saatler ve etkinlik başlıkları şunlardır: ${spokenFamily}. Boş saatleri ise: ${freeText}.`;
+    const replyText =
+      `👩‍💼 *Donna — Onur Bey'in Ajandası (Saatler & Etkinlik Başlıkları — ${dateIso})*\n\n` +
+      `${familyLines.join("\n")}\n\n` +
+      `🟢 *Müsait Boş Saatler:* ${freeText}`;
+
+    return {
+      transcript,
+      intent: "calendar",
+      action: "query",
+      callerRole: "family",
+      replyText,
+      spokenReply: spoken,
+      usedGemini,
+      syncedToGoogle: true,
+    };
+  }
+
+  // 3. GOOGLE CONTACTS (Aileden Olmayan Kontaklar): ONLY free time slots + prompt for Title, Content, Participant Emails
+  const callerKey = (
+    callerContact.phone ||
+    callerContact.displayName ||
+    "external"
+  )
+    .replace(/\s+/g, "_")
+    .toLowerCase();
+  const existingPending = pendingMeetingRequestsByCaller.get(callerKey);
+  pendingMeetingRequestsByCaller.set(callerKey, {
+    ...existingPending,
+    date: dateIso,
+    emails: existingPending?.emails?.length
+      ? existingPending.emails
+      : callerContact.email
+        ? [callerContact.email]
+        : [],
+    updatedAt: Date.now(),
+  });
+
+  const spoken = `Merhaba ${callerContact.displayName}, ben Onur Bey'in asistanı Donna. Onur Bey'in ${spokenDate} tarihli ajandasında müsait olan boş saatleri şunlardır: ${freeText}. Toplantı talebi oluşturabilmem için lütfen uygun bir boş saati, toplantı başlığını, toplantı içeriğini ve katılımcıların e-posta adreslerini paylaşır mısınız?`;
+  const replyText =
+    `👩‍💼 *Donna — Onur Bey'in Müsait Boş Saatleri (${dateIso})*\n\n` +
+    `🟢 *Boş Saat Aralıkları:* ${freeText}\n\n` +
+    `📋 *Toplantı Talebi Oluşturmak İçin Lütfen Şu Bilgileri İletin:*\n` +
+    `• 🕒 *Tercih Edilen Boş Saat*\n` +
+    `• 📌 *Toplantı Başlığı*\n` +
+    `• 📝 *Toplantı İçeriği / Konusu*\n` +
+    `• 📧 *Katılımcıların E-posta Adresleri*\n\n` +
+    `_(Örn: "Yarın saat 11:00'e Lunixi Değerlendirme başlığıyla, bütçe planlaması içerikli, ahmet@firma.com katılımcılı toplantı oluştur")_`;
+
+  return {
+    transcript,
+    intent: "calendar",
+    action: "query",
+    callerRole: "contact",
+    replyText,
+    spokenReply: spoken,
+    usedGemini,
+    syncedToGoogle: true,
+  };
+}
+
+async function handleExternalContactMeetingRequest(params: {
+  accessToken: string | null;
+  calData: {
+    title: string;
+    date: string;
+    startTime: string;
+    endTime: string;
+    attendee: string;
+    attendeeEmail?: string;
+    location: string;
+  };
+  hasExplicitTime: boolean;
+  hasExplicitDate: boolean;
+  callerContact: {
+    callerRole: CallerRole;
+    displayName: string;
+    phone?: string;
+    email?: string;
+    attributionLabel?: string;
+  };
+  transcript: string;
+  isVoice: boolean;
+  usedGemini: boolean;
+}): Promise<AssistantProcessResult> {
+  const {
+    accessToken,
+    calData,
+    hasExplicitTime,
+    hasExplicitDate,
+    callerContact,
+    transcript,
+    isVoice,
+    usedGemini,
+  } = params;
+
+  const callerKey =
+    (callerContact.phone || callerContact.displayName || "external")
+      .replace(/\s+/g, "_")
+      .toLowerCase();
+  const prevPending = pendingMeetingRequestsByCaller.get(callerKey);
+  const activePending =
+    prevPending && Date.now() - prevPending.updatedAt < 15 * 60 * 1000
+      ? prevPending
+      : undefined;
+
+  // 1. Extract emails from transcript + pending + caller's own Google Contact email if mentioned
+  const transcriptEmails =
+    transcript.match(/[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/g) || [];
+  const mergedEmails = Array.from(
+    new Set([
+      ...(activePending?.emails || []),
+      ...transcriptEmails.map((e) => e.toLowerCase()),
+    ])
+  );
+
+  // 2. Extract meeting content / description ("içerik: ...", "konu: ...", "hakkında", or descriptive clause)
+  let extractedContent = activePending?.content || "";
+  const contentMatch = transcript.match(
+    /(?:içeriği|icerigi|içerik|icerik|konusu|konu|gündemi|gundemi)\s*[:;-]?\s*([^,.;]+?)(?=\s+(?:olan|için|icin|katılımcı|katilimci|e-?posta|mail|saat|[a-zA-Z0-9._%+-]+@)|[,.]|$)/i
+  );
+  const aboutMatch = transcript.match(
+    /([^,.;]{4,60}?)\s+(?:hakkında|hakkinda|üzerine|uzerine|konulu|içerikli|icerikli)\b/i
+  );
+  if (contentMatch && contentMatch[1]?.trim()) {
+    extractedContent = contentMatch[1].trim();
+  } else if (aboutMatch && aboutMatch[1]?.trim()) {
+    extractedContent = aboutMatch[1]
+      .replace(/^(?:yarın|yarin|bugün|bugun|saat\s*\d{1,2}[:.]?\d{0,2}\s*['’]?[a-zçğıöşü]*)\s*/i, "")
+      .trim();
+  }
+
+  // 3. Extract title
+  let candidateTitle = calData.title || "";
+  if (
+    /^(?:planlanan\s+etkinlik|toplant[ıi]|randevu|g[öo]r[üu][şs]me|etkinlik|ajanda)$/i.test(
+      candidateTitle.trim()
+    ) ||
+    /\b(?:toplant[ıi]\s+talep|toplant[ıi]\s+taleb|bo[şs]\s+saat|m[üu]sait|nelerdir|s[öo]yler\s+misin|onur\s+bey\s+ile\s+toplant[ıi])\b/i.test(
+      candidateTitle
+    )
+  ) {
+    candidateTitle = "";
+  }
+  const explicitTitleMatch = transcript.match(
+    /(?:başlığı|basligi|başlık|baslik)\s*[:;-]?\s*([^,.;]+?)(?=\s+(?:içeriği|icerigi|içerik|icerik|konusu|konu|olan|katılımcı|katilimci|e-?posta|mail)|[,.]|$)/i
+  );
+  if (explicitTitleMatch && explicitTitleMatch[1]?.trim()) {
+    candidateTitle = explicitTitleMatch[1].trim();
+  }
+  const mergedTitle = candidateTitle || activePending?.title || "";
+
+  // Only fallback to mergedTitle as content when the caller already provided explicit time and emails in a single compact sentence
+  if (
+    !extractedContent &&
+    mergedTitle &&
+    mergedTitle.split(/\s+/).length >= 2 &&
+    (hasExplicitTime || activePending?.hasExplicitTime) &&
+    mergedEmails.length > 0
+  ) {
+    extractedContent = mergedTitle;
+  }
+
+  const finalDate =
+    hasExplicitDate || !activePending?.date ? calData.date : activePending.date;
+  const finalHasTime = Boolean(hasExplicitTime || activePending?.hasExplicitTime);
+  const finalStartTime = hasExplicitTime
+    ? calData.startTime
+    : activePending?.startTime || calData.startTime;
+  const finalEndTime = hasExplicitTime
+    ? calData.endTime
+    : activePending?.endTime || calData.endTime;
+
+  const { freeSlots, isSlotBusy } = await fetchDayCalendarEventsAndFreeSlots(
+    accessToken,
+    finalDate
+  );
+  const freeText =
+    freeSlots.length > 0
+      ? freeSlots.join(", ")
+      : "09:00 - 18:00 mesai saatleri içinde boş aralık bulunmuyor";
+  const spokenDate = formatSpokenTurkishDate(finalDate);
+
+  const slotConflict =
+    finalHasTime && isSlotBusy(finalStartTime, finalEndTime);
+
+  const missingItems: string[] = [];
+  if (!finalHasTime || slotConflict) {
+    missingItems.push(
+      slotConflict
+        ? `🕒 *Uygun Boş Saat* _(İstediğiniz ${finalStartTime} saati dolu; lütfen boş saatlerden birini seçin)_`
+        : `🕒 *Tercih Edilen Boş Saat*`
+    );
+  }
+  if (!mergedTitle) {
+    missingItems.push("📌 *Toplantı Başlığı*");
+  }
+  if (!extractedContent) {
+    missingItems.push("📝 *Toplantı İçeriği / Konusu*");
+  }
+  if (mergedEmails.length === 0) {
+    missingItems.push("📧 *Katılımcıların E-posta Adresleri*");
+  }
+
+  if (missingItems.length > 0) {
+    pendingMeetingRequestsByCaller.set(callerKey, {
+      title: mergedTitle || undefined,
+      content: extractedContent || undefined,
+      emails: mergedEmails,
+      date: finalDate,
+      startTime: finalStartTime,
+      endTime: finalEndTime,
+      hasExplicitTime: finalHasTime && !slotConflict,
+      updatedAt: Date.now(),
+    });
+
+    const receivedLines: string[] = [];
+    if (mergedTitle) receivedLines.push(`• ✅ *Başlık:* ${mergedTitle}`);
+    if (extractedContent)
+      receivedLines.push(`• ✅ *İçerik:* ${extractedContent}`);
+    if (finalHasTime && !slotConflict)
+      receivedLines.push(`• ✅ *Saat:* ${finalDate} ${finalStartTime} - ${finalEndTime}`);
+    if (mergedEmails.length > 0)
+      receivedLines.push(`• ✅ *Katılımcı E-posta:* ${mergedEmails.join(", ")}`);
+
+    const conflictSpoken = slotConflict
+      ? `İstediğiniz saat ${finalStartTime} dolu görünüyor. `
+      : "";
+    const spoken = `Merhaba ${callerContact.displayName}, ben Onur Bey'in asistanı Donna. ${conflictSpoken}Onur Bey'in ${spokenDate} ajandasındaki boş saatleri şunlardır: ${freeText}. Toplantıyı oluşturabilmem için lütfen ${missingItems
+      .map((m) => m.replace(/[*_🕒📌📝📧]/g, "").trim())
+      .join(", ")} bilgisini paylaşır mısınız?`;
+
+    const replyText =
+      `👩‍💼 *Donna — Toplantı Talebi & Müsait Boş Saatler (${finalDate})*\n\n` +
+      `🟢 *Onur Bey'in Boş Saat Aralıkları:* ${freeText}\n\n` +
+      (receivedLines.length > 0
+        ? `📥 *Alınan Bilgiler:*\n${receivedLines.join("\n")}\n\n`
+        : "") +
+      `✍️ *Toplantıyı Oluşturmak İçin Eksik Bilgiler:*\n` +
+      `${missingItems.map((m) => `• ${m}`).join("\n")}\n\n` +
+      `_(Tek mesajda veya sesli olarak söyleyebilirsiniz)_`;
+
+    return {
+      transcript,
+      intent: "calendar",
+      action: "query",
+      callerRole: "contact",
+      replyText,
+      spokenReply: spoken,
+      usedGemini,
+      syncedToGoogle: false,
+    };
+  }
+
+  // All required fields (Free Slot, Title, Content, Participant Emails) are present -> Create the Calendar Event!
+  pendingMeetingRequestsByCaller.delete(callerKey);
+
+  const eventPayload = {
+    title: mergedTitle,
+    date: finalDate,
+    startTime: finalStartTime,
+    endTime: finalEndTime,
+    attendee: `${callerContact.displayName} (${mergedEmails.join(", ")})`,
+    attendeeEmail: mergedEmails.join(", "),
+    location: calData.location || "Google Meet",
+    description: `📋 Toplantı İçeriği: ${extractedContent}\n👤 Talep Eden (Google Kontak): ${callerContact.attributionLabel || callerContact.displayName}\n📧 Katılımcı E-postaları: ${mergedEmails.join(", ")}`,
+  };
+
+  let syncedToGoogle = false;
+  let htmlLink: string | undefined;
+  let googleSyncError: string | undefined;
+
+  if (accessToken) {
+    const createRes = await createGoogleCalendarEvent(accessToken, eventPayload);
+    syncedToGoogle = createRes.ok;
+    htmlLink = createRes.htmlLink;
+    googleSyncError = createRes.error;
+  }
+
+  const calendarEvent: CalendarItem = {
+    id: "evt-" + Date.now(),
+    title: mergedTitle,
+    date: finalDate,
+    startTime: finalStartTime,
+    endTime: finalEndTime,
+    attendee: `${callerContact.displayName} (${mergedEmails.join(", ")})`,
+    attendeeEmail: mergedEmails.join(", "),
+    location: eventPayload.location,
+    source: `👤 ${callerContact.attributionLabel || callerContact.displayName}`,
+    createdTime: "Şimdi",
+    htmlLink,
+    syncedWithGoogle: syncedToGoogle,
+  };
+
+  const spoken = `Teşekkürler ${callerContact.displayName}. ${spokenDate} saat ${finalStartTime} için ${mergedTitle} başlıklı toplantı talebinizi, içeriği ve katılımcı e-posta adresleriyle birlikte Onur Bey'in ajandasına kaydettim ve takvim davetiyelerini gönderdim.`;
+  const replyText =
+    `📅 *Donna — Toplantı Talebiniz Onur Bey'in Ajandasına Eklendi!*\n\n` +
+    `📌 *Başlık:* ${mergedTitle}\n` +
+    `📝 *İçerik:* ${extractedContent}\n` +
+    `🗓️ *Tarih & Saat:* ${finalDate}, ${finalStartTime} - ${finalEndTime}\n` +
+    `📧 *Katılımcı E-postaları:* ${mergedEmails.join(", ")}\n` +
+    `👤 *Talep Eden Kontak:* ${callerContact.attributionLabel || callerContact.displayName}` +
+    (htmlLink ? `\n🔗 *Takvim Bağlantısı:* ${htmlLink}` : "") +
+    (syncedToGoogle
+      ? `\n✅ *Onur Bey'in Google Takvim'ine işlendi ve katılımcılara e-posta daveti gönderildi!*`
+      : googleSyncError
+        ? `\n⚠️ _${googleSyncError}_`
+        : "");
+
+  return {
+    transcript,
+    intent: "calendar",
+    action: "create",
+    callerRole: "contact",
+    replyText,
+    spokenReply: spoken,
+    usedGemini,
+    syncedToGoogle,
+    googleSyncError,
+    calendarEvent,
+  };
+}
+
+async function handleTasksAndNotesQueryByRole(params: {
+  accessToken: string | null;
+  callerContact: {
+    callerRole: CallerRole;
+    displayName: string;
+  };
+  transcript: string;
+  isVoice: boolean;
+  usedGemini: boolean;
+}): Promise<AssistantProcessResult> {
+  const { accessToken, callerContact, transcript, isVoice, usedGemini } = params;
+
+  if (callerContact.callerRole !== "owner") {
+    const deniedSpoken =
+      callerContact.callerRole === "family"
+        ? "Merhaba, ben Onur Bey'in asistanı Donna. Güvenlik ve gizlilik kuralları gereği aile üyeleriyle yalnızca Onur Bey'in ajandası ve etkinlik başlıkları hakkında bilgi paylaşabiliyorum; iş ve görev listesi bilgilerine erişimim kapalıdır."
+        : "Merhaba, ben Onur Bey'in asistanı Donna. Güvenlik kuralları gereği Onur Bey'in iş ve görev listesi bilgilerini yalnızca kendisine aktarabiliyorum.";
+    return {
+      transcript,
+      intent: "note",
+      action: "query",
+      callerRole: callerContact.callerRole,
+      replyText: `🔒 *Gizlilik & Erişim Kısıtlaması*\n\n👩‍💼 _"${deniedSpoken}"_`,
+      spokenReply: deniedSpoken,
+      usedGemini,
+      syncedToGoogle: false,
+    };
+  }
+
+  const tasks: Array<{ title: string; notes?: string }> = [];
+  if (accessToken) {
+    try {
+      const res = await fetch(
+        `https://tasks.googleapis.com/tasks/v1/lists/@default/tasks?maxResults=25&showCompleted=false`,
+        {
+          cache: "no-store",
+          headers: { Authorization: `Bearer ${accessToken}` },
+        }
+      );
+      if (res.ok) {
+        const data = await res.json();
+        for (const t of data.items || []) {
+          if (t.title) {
+            tasks.push({
+              title: String(t.title).trim(),
+              notes: t.notes ? String(t.notes).trim() : undefined,
+            });
+          }
+        }
+      }
+    } catch {
+      // Ignore error
+    }
+  }
+
+  for (const n of recentWebhookEvents.notes) {
+    if (!tasks.some((t) => normalizeTr(t.title) === normalizeTr(n.title))) {
+      tasks.push({ title: n.content || n.title });
+    }
+  }
+
+  if (tasks.length === 0) {
+    const spoken =
+      "Onur Bey, şu anda Google Görevler ve iş listenizde bekleyen açık bir görev görünmüyor.";
+    return {
+      transcript,
+      intent: "note",
+      action: "query",
+      callerRole: "owner",
+      replyText:
+        (isVoice ? `🎙️ *Sesli Sorgu:* _"${transcript}"_\n\n` : "") +
+        `📋 *İş & Görevleriniz (Google Tasks)*\n\n✨ Şu anda bekleyen açık bir iş veya göreviniz bulunmuyor Onur Bey.`,
+      spokenReply: spoken,
+      usedGemini,
+      syncedToGoogle: true,
+    };
+  }
+
+  const lines = tasks
+    .slice(0, 12)
+    .map(
+      (t, i) =>
+        `${i + 1}. 📌 *${t.title}*${t.notes ? ` — _${t.notes.slice(0, 80)}_` : ""}`
+    );
+  const spokenList = tasks
+    .slice(0, 5)
+    .map((t) => t.title)
+    .join(", ");
+  const spoken = `Onur Bey, iş ve görev listenizde toplam ${tasks.length} kayıt bulunuyor: ${spokenList}.`;
+
+  return {
+    transcript,
+    intent: "note",
+    action: "query",
+    callerRole: "owner",
+    replyText:
+      (isVoice ? `🎙️ *Sesli Sorgu:* _"${transcript}"_\n\n` : "") +
+      `📋 *İş & Görev Listeniz (${tasks.length} Kayıt)*\n\n${lines.join("\n")}`,
+    spokenReply: spoken,
+    usedGemini,
+    syncedToGoogle: true,
+  };
+}
+
+async function handleContactsQueryByRole(params: {
+  accessToken: string | null;
+  callerContact: {
+    callerRole: CallerRole;
+    displayName: string;
+  };
+  targetQuery: string;
+  transcript: string;
+  isVoice: boolean;
+  usedGemini: boolean;
+}): Promise<AssistantProcessResult> {
+  const {
+    accessToken,
+    callerContact,
+    targetQuery,
+    transcript,
+    isVoice,
+    usedGemini,
+  } = params;
+
+  if (callerContact.callerRole !== "owner") {
+    const deniedSpoken =
+      callerContact.callerRole === "family"
+        ? "Merhaba, ben Onur Bey'in asistanı Donna. Güvenlik ve gizlilik kuralları gereği aile üyeleriyle yalnızca Onur Bey'in ajandası ve etkinlik başlıkları hakkında bilgi paylaşabiliyorum; kontak listesi bilgilerine erişimim kapalıdır."
+        : "Merhaba, ben Onur Bey'in asistanı Donna. Güvenlik kuralları gereği Onur Bey'in kontak listesi bilgilerini yalnızca kendisine aktarabiliyorum.";
+    return {
+      transcript,
+      intent: "contact",
+      action: "query",
+      callerRole: callerContact.callerRole,
+      replyText: `🔒 *Gizlilik & Erişim Kısıtlaması*\n\n👩‍💼 _"${deniedSpoken}"_`,
+      spokenReply: deniedSpoken,
+      usedGemini,
+      syncedToGoogle: false,
+    };
+  }
+
+  const cleanPersonQuery = targetQuery
+    .replace(
+      /\b(rehber\w*|kontak\w*|kisi\w*|kişi\w*|list\w*|kimler|kim|nedir|neler|numaras[ıi]|telefonu|maili|e-?postas[ıi]|adresi|söyler|soyler|misin|söyle|soyle)\b/gi,
+      ""
+    )
+    .trim();
+
+  if (accessToken && cleanPersonQuery.length >= 2) {
+    const matches = await findAllMatchingGooglePersonContacts(
+      accessToken,
+      cleanPersonQuery
+    );
+    if (matches.length > 0) {
+      const formatted = matches.slice(0, 5).map((p, idx) => {
+        const name = p.names?.[0]?.displayName || cleanPersonQuery;
+        const phone = p.phoneNumbers?.[0]?.value || "Numara yok";
+        const email = p.emailAddresses?.[0]?.value || "E-posta yok";
+        const org = p.organizations?.[0]?.name || "";
+        return `${idx + 1}. 👤 *${name}* — 📞 ${phone} | ✉️ ${email}${org ? ` | 🏢 ${org}` : ""}`;
+      });
+      const first = matches[0];
+      const fName = first.names?.[0]?.displayName || cleanPersonQuery;
+      const fPhone = first.phoneNumbers?.[0]?.value || "kayıtlı numarası yok";
+      const fEmail = first.emailAddresses?.[0]?.value || "kayıtlı e-postası yok";
+      const spoken = `Onur Bey, Google Rehber'inizde ${fName} için kayıtlı telefon: ${fPhone}, e-posta adresi: ${fEmail}.`;
+
+      return {
+        transcript,
+        intent: "contact",
+        action: "query",
+        callerRole: "owner",
+        targetQuery: cleanPersonQuery,
+        replyText:
+          (isVoice ? `🎙️ *Sesli Sorgu:* _"${transcript}"_\n\n` : "") +
+          `📇 *Google Kontak Bilgisi (${cleanPersonQuery})*\n\n${formatted.join("\n")}`,
+        spokenReply: spoken,
+        usedGemini,
+        syncedToGoogle: true,
+      };
+    }
+  }
+
+  const snap = await fetchLiveWorkspaceSnapshot(true);
+  const contacts = snap.contacts || [];
+  if (contacts.length === 0) {
+    const spoken = cleanPersonQuery
+      ? `Onur Bey, Google Rehber'inizde ${cleanPersonQuery} adına kayıtlı bir kişi bulamadım.`
+      : "Onur Bey, Google Rehber'inizde listelenecek kayıt bulunamadı.";
+    return {
+      transcript,
+      intent: "contact",
+      action: "query",
+      callerRole: "owner",
+      replyText:
+        (isVoice ? `🎙️ *Sesli Sorgu:* _"${transcript}"_\n\n` : "") +
+        `📇 *Google Kontak Listesi*\n\n⚠️ ${spoken}`,
+      spokenReply: spoken,
+      usedGemini,
+      syncedToGoogle: false,
+    };
+  }
+
+  const topContacts = contacts.slice(0, 12);
+  const lines = topContacts.map(
+    (c, i) =>
+      `${i + 1}. 👤 *${c.name}*${c.phone ? ` — 📞 ${c.phone}` : ""}${c.email ? ` | ✉️ ${c.email}` : ""}`
+  );
+  const spokenNames = topContacts
+    .slice(0, 6)
+    .map((c) => c.name)
+    .join(", ");
+  const spoken = `Onur Bey, Google Kontak listenizde ${contacts.length} kişi görünüyor. Başlıca kişiler: ${spokenNames}.`;
+
+  return {
+    transcript,
+    intent: "contact",
+    action: "query",
+    callerRole: "owner",
+    replyText:
+      (isVoice ? `🎙️ *Sesli Sorgu:* _"${transcript}"_\n\n` : "") +
+      `📇 *Google Kontak Listeniz (${contacts.length} Kişi)*\n\n${lines.join("\n")}`,
+    spokenReply: spoken,
+    usedGemini,
+    syncedToGoogle: true,
   };
 }
 
@@ -5516,6 +6553,15 @@ async function processAssistantInputCore(params: {
       parsed.recipientQuery = localParsed.recipientQuery;
     }
   } else if (
+    localParsed.action === "query" &&
+    (localParsed.intent === "note" || localParsed.intent === "contact")
+  ) {
+    parsed.intent = localParsed.intent;
+    parsed.action = "query";
+    if (localParsed.targetQuery) {
+      parsed.targetQuery = localParsed.targetQuery;
+    }
+  } else if (
     localParsed.intent === "contact" &&
     /^!(?:rehber|kisi|kişi)\b/i.test(transcript.trim())
   ) {
@@ -5535,15 +6581,16 @@ async function processAssistantInputCore(params: {
     }
   }
 
-  // Resolve whether the sender/caller is a friend in Onur Bey's Google Contacts
+  // Resolve whether the sender/caller is Owner, Family Member, or Google Contact
   const callerContact = await resolveCallerContactFromGoogle(
     accessToken,
     params.senderName,
     params.senderPhone,
-    transcript
+    transcript,
+    params.isExternalCaller
   );
 
-  // Hard guard: priority order is delete > update > create
+  // Hard guard: priority order is delete > update > create > query
   const normTranscriptForAction = normalizeTr(transcript);
   const hasExplicitDeleteWord =
     /\b(sil|siler|silin|iptal|kaldir|cikar)\b/.test(normTranscriptForAction);
@@ -5560,15 +6607,63 @@ async function processAssistantInputCore(params: {
       normTranscriptForAction
     );
 
+  const isQueryIntent =
+    !hasExplicitDeleteWord &&
+    !hasExplicitUpdateWord &&
+    !hasExplicitCreateWord &&
+    (isWorkspaceQueryOrQuestion(transcript) ||
+      localParsed.action === "query" ||
+      parsed.action === "query");
+
   let action: ActionType = hasExplicitDeleteWord
     ? "delete"
     : hasExplicitUpdateWord
       ? "update"
-      : hasExplicitCreateWord
-        ? "create"
-        : localParsed.action !== "create"
-          ? localParsed.action
-          : parsed.action || "create";
+      : isQueryIntent
+        ? "query"
+        : hasExplicitCreateWord
+          ? "create"
+          : localParsed.action !== "create"
+            ? localParsed.action
+            : parsed.action || "create";
+
+  // Check if an external Google Contact is replying to an active meeting request with Title / Content / Email / Time
+  const callerKeyForPending = (
+    callerContact.phone ||
+    callerContact.displayName ||
+    "external"
+  )
+    .replace(/\s+/g, "_")
+    .toLowerCase();
+  const activePendingMeeting =
+    callerContact.callerRole === "contact"
+      ? pendingMeetingRequestsByCaller.get(callerKeyForPending)
+      : undefined;
+  if (
+    activePendingMeeting &&
+    Date.now() - activePendingMeeting.updatedAt < 15 * 60 * 1000 &&
+    (localParsed.hasExplicitTime ||
+      /@/.test(transcript) ||
+      /\b(baslik\w*|konu\w*|icerik\w*|katilimci\w*|toplanti\w*)\b/.test(
+        normTranscriptForAction
+      ))
+  ) {
+    parsed.intent = "calendar";
+    action = "create";
+  }
+
+  // If external non-family Google Contact requests a meeting ("toplantı talep ediyorum", "görüşmek istiyorum"),
+  // route to handleExternalContactMeetingRequest (create flow which checks free slots & required fields)
+  if (
+    callerContact.callerRole === "contact" &&
+    parsed.intent === "calendar" &&
+    /\b(toplanti\s+taleb\w*|toplanti\s+talep\w*|toplanti\s+yapmak\w*|toplanti\s+istiyorum|randevu\s+talep\w*|randevu\s+almak\w*|gorusmek\s+istiyorum)\b/.test(
+      normTranscriptForAction
+    )
+  ) {
+    action = "create";
+  }
+
   const rawTargetQuery =
     parsed.targetQuery ||
     localParsed.targetQuery ||
@@ -5591,7 +6686,7 @@ async function processAssistantInputCore(params: {
       normTranscriptForAction
     );
 
-  if (isVoice && parsed.intent === "note") {
+  if (isVoice && parsed.intent === "note" && action !== "query") {
     const hasExplicitNoteCommand =
       /^!not\b/i.test(transcript.trim()) ||
       /\b(not\w*|gorev\w*|ajanda\w*|takvim\w*|is\s+olarak\w*|hatirlat\w*|listeye\w*|ekle\w*|kaydet\w*|yaz\w*|birak\w*|ata\w*)\b/.test(
@@ -5602,8 +6697,9 @@ async function processAssistantInputCore(params: {
       parsed.intent = "help";
     }
   }
-  if (isVoice && parsed.intent === "calendar") {
+  if (isVoice && parsed.intent === "calendar" && action !== "query") {
     const hasExplicitCalVerbOrNoun =
+      Boolean(activePendingMeeting) ||
       localParsed.hasExplicitTime ||
       localParsed.hasExplicitDate ||
       /\b(planla\w*|ayarla\w*|ekle\w*|olustur\w*|ac\w*|gir\w*|kaydet\w*|yaz\w*|dus\w*|birak\w*|koy\w*|davet\w*|gonder\w*|paylas\w*|sil\w*|iptal\w*|kaldir\w*|guncelle\w*|degistir\w*|ertele\w*|tasi\w*|cek\w*|al\w*|toplanti\w*|etkinlik\w*|etkinlig\w*|takvim\w*|randevu\w*|ajanda\w*|gorusme\w*|bulusma\w*|not\w*|gorev\w*|hatirlat\w*|saat\b|yarin\b|bugun\b|haftaya\b)\b/.test(
@@ -5621,7 +6717,7 @@ async function processAssistantInputCore(params: {
       parsed.intent = "help";
     }
   }
-  if (isVoice && parsed.intent === "contact") {
+  if (isVoice && parsed.intent === "contact" && action !== "query") {
     const hasPhoneDigits = /\b0?5\d{2}[\s-]?\d{3}[\s-]?\d{2}[\s-]?\d{2}\b|\b\d{10,11}\b/.test(
       transcript
     );
@@ -5725,6 +6821,36 @@ async function processAssistantInputCore(params: {
 
     if (recipientEmail && !calData.attendeeEmail) {
       calData.attendeeEmail = recipientEmail;
+    }
+
+    // QUERY CALENDAR / AGENDA BY CALLER ROLE (Owner / Family / Google Contact)
+    if (action === "query") {
+      return await handleCalendarQueryByRole({
+        accessToken,
+        dateIso: calData.date,
+        callerContact,
+        transcript,
+        isVoice,
+        usedGemini,
+      });
+    }
+
+    // EXTERNAL GOOGLE CONTACT MEETING REQUEST (Free Slots + Title + Content + Participant Emails)
+    if (
+      action === "create" &&
+      callerContact.callerRole === "contact" &&
+      getDonnaAccessPolicy().contactsFreeSlotsMeetingFlow
+    ) {
+      return await handleExternalContactMeetingRequest({
+        accessToken,
+        calData,
+        hasExplicitTime: Boolean(localParsed.hasExplicitTime),
+        hasExplicitDate: Boolean(localParsed.hasExplicitDate || parsed.calendar?.date),
+        callerContact,
+        transcript,
+        isVoice,
+        usedGemini,
+      });
     }
 
     if (action === "share") {
@@ -6034,8 +7160,19 @@ async function processAssistantInputCore(params: {
     };
   }
 
-  // ==================== 2. CONTACTS (CREATE / UPDATE / DELETE) ====================
+  // ==================== 2. CONTACTS (QUERY / CREATE / UPDATE / DELETE) ====================
   if (parsed.intent === "contact") {
+    if (action === "query") {
+      return await handleContactsQueryByRole({
+        accessToken,
+        callerContact,
+        targetQuery,
+        transcript,
+        isVoice,
+        usedGemini,
+      });
+    }
+
     const cntData = parsed.contact ||
       localParsed.contact || {
         name: targetQuery || "Yeni Kişi",
@@ -6224,6 +7361,16 @@ async function processAssistantInputCore(params: {
   }
 
   // ==================== 3. NOTES & GOOGLE TASKS / İŞ ATAMASI ====================
+  if (parsed.intent === "note" && action === "query") {
+    return await handleTasksAndNotesQueryByRole({
+      accessToken,
+      callerContact,
+      transcript,
+      isVoice,
+      usedGemini,
+    });
+  }
+
   if (parsed.intent === "note" && parsed.note) {
     const cleanNoteContent =
       localParsed.intent === "note" &&
